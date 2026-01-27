@@ -78,6 +78,7 @@ struct AppState {
 #[derive(Deserialize)]
 struct ApiKline {
     timestamp: String,
+    open_price: String,
     close_price: String,
 }
 
@@ -201,7 +202,7 @@ fn normalize_settings(mut settings: QuoteSettings) -> QuoteSettings {
 async fn fetch_batch_quotes(
     token: &str,
     codes: &[String],
-) -> Result<HashMap<String, (f64, u64)>, String> {
+) -> Result<HashMap<String, (f64, u64, f64)>, String> {
     let mut url = reqwest::Url::parse("https://quote.alltick.io/quote-b-api/batch-kline")
         .map_err(|e| e.to_string())?;
 
@@ -241,11 +242,12 @@ async fn fetch_batch_quotes(
     let mut map = HashMap::new();
     for item in payload.data.kline_list {
         if let Some(kline) = item.kline_data.get(0) {
-            if let (Ok(price), Ok(ts)) = (
+            if let (Ok(price), Ok(ts), Ok(open)) = (
                 kline.close_price.parse::<f64>(),
                 kline.timestamp.parse::<u64>(),
+                kline.open_price.parse::<f64>(),
             ) {
-                map.insert(item.code, (price, ts));
+                map.insert(item.code, (price, ts, open));
             }
         }
     }
@@ -287,8 +289,15 @@ fn format_title(symbol: &SymbolItem, price: Option<f64>, trend: Option<&str>) ->
     } else {
         symbol.label.as_str()
     };
+    let trend = match trend {
+        Some("▲") => "🟩",
+        Some("▼") => "🟥",
+        Some("—") => "⚠️",
+        Some(other) => other,
+        None => "⚠️",
+    };
     match (trend, price) {
-        (Some(trend), Some(price)) => format!("{trend} {name} {price:.2}"),
+        (trend, Some(price)) => format!("{trend} {name} {price:.2}"),
         _ => format!("{name} --"),
     }
 }
@@ -350,24 +359,25 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                     match fetch_batch_quotes(&settings.token, &codes).await {
                         Ok(map) => {
                             for symbol in &settings.symbols {
-                                if let Some((price, _ts)) = map.get(&symbol.code) {
-                                    let trend = match last_prices.get(&symbol.code) {
-                                        Some(last) if price > last => "🟢",
-                                        Some(last) if price < last => "🔴",
-                                        Some(_) => "⚪",
-                                        None => "⚪",
+                                if let Some((price, _ts, open)) = map.get(&symbol.code) {
+                                    let trend = if price > open {
+                                        "▲"
+                                    } else if price < open {
+                                        "▼"
+                                    } else {
+                                        "—"
                                     };
                                     last_prices.insert(symbol.code.clone(), *price);
                                     trends.insert(symbol.code.clone(), trend.to_string());
                                     success += 1;
                                 } else {
-                                    trends.insert(symbol.code.clone(), "⚪".to_string());
+                                    trends.insert(symbol.code.clone(), "—".to_string());
                                 }
                             }
                         }
                         Err(_) => {
                             for symbol in &settings.symbols {
-                                trends.insert(symbol.code.clone(), "⚪".to_string());
+                                trends.insert(symbol.code.clone(), "—".to_string());
                             }
                         }
                     }
