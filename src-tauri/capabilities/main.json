@@ -1,0 +1,13 @@
+{
+  "identifier": "main",
+  "description": "main capabilities",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "clipboard-manager:allow-write-text"
+  ]
+}
