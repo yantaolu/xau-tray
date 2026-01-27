@@ -5534,6 +5534,7 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-opener",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
