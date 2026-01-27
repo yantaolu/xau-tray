@@ -1,8 +1,4 @@
-// import { createApp } from "vue";
-// import App from "./App.vue";
-//
-// createApp(App).mount("#app");
-import { setupTray } from "./tray";
+import { createApp } from "vue";
+import App from "./App.vue";
 
-setupTray();
-
+createApp(App).mount("#app");
