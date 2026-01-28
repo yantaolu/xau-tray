@@ -206,7 +206,7 @@ async function closeWindow() {
           <div v-for="(symbol, index) in settings.symbols" :key="index" class="symbol-row">
             <input v-model="symbol.label" placeholder="名称"/>
             <input v-model="symbol.code" placeholder="编码，如 XAUUSD"/>
-            <button class="icon" type="button" @click="removeSymbol(index)">移除</button>
+            <button class="link" type="button" @click="removeSymbol(index)">移除</button>
           </div>
         </div>
       </article>
@@ -278,6 +278,14 @@ async function closeWindow() {
 <style>
 :root {
   color-scheme: light;
+  --ink: #141824;
+  --muted: #5f6b7a;
+  --line: rgba(20, 24, 36, 0.1);
+  --panel: rgba(255, 255, 255, 0.88);
+  --panel-strong: #ffffff;
+  --accent: #0ea5e9;
+  --accent-2: #f97316;
+  --accent-3: #10b981;
 }
 
 :root, html, body {
@@ -291,6 +299,9 @@ async function closeWindow() {
 body {
   margin: 0;
   overflow-y: auto;
+  background: radial-gradient(1200px 600px at 10% -10%, #fef3c7 0%, transparent 60%),
+    radial-gradient(900px 500px at 90% 0%, #dbeafe 0%, transparent 55%),
+    linear-gradient(180deg, #f7f8fb 0%, #eef2f6 100%);
 }
 
 * {
@@ -298,16 +309,16 @@ body {
 }
 
 #app {
-  background: #f4f6f8;
+  background: transparent;
 }
 </style>
 
 <style scoped>
 .shell {
   min-height: 100vh;
-  padding: 16px 16px 76px;
-  font-family: "Avenir Next", "Futura", "Helvetica Neue", sans-serif;
-  color: #333;
+  padding: 20px 18px 86px;
+  font-family: "Avenir Next", "Futura", "Gill Sans", sans-serif;
+  color: var(--ink);
   position: relative;
   overflow: hidden;
 }
@@ -317,11 +328,12 @@ body {
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 12px 28px;
+  padding: 14px 24px;
   z-index: 1;
-  background: #ffffff;
-  border-top: 1px solid #eef0f3;
-  box-shadow: 0 -5px 10px rgba(18, 20, 25, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(20, 24, 36, 0.08);
+  box-shadow: 0 -14px 28px rgba(18, 20, 25, 0.08);
 }
 
 .hero-actions {
@@ -339,34 +351,36 @@ body {
 .grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 16px;
+  gap: 18px;
 }
 
 .card {
-  background: #ffffff;
-  border-radius: 18px;
-  padding: 20px;
-  box-shadow: 0 14px 30px rgba(18, 20, 25, 0.08);
-  border: 1px solid #eef0f3;
+  background: var(--panel);
+  border-radius: 20px;
+  padding: 22px;
+  box-shadow: 0 22px 40px rgba(18, 20, 25, 0.1);
+  border: 1px solid rgba(20, 24, 36, 0.08);
+  backdrop-filter: blur(10px);
 }
 
 .card-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .card-head h2 {
   margin: 0;
   font-size: 18px;
+  letter-spacing: 0.02em;
 }
 
 .label {
   display: block;
-  margin: 12px 0 6px;
+  margin: 14px 0 6px;
   font-size: 12px;
-  color: #6c737c;
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.12em;
 }
@@ -374,19 +388,20 @@ body {
 input,
 select {
   width: 100%;
-  height: 32px;
+  height: 36px;
   padding: 0 12px;
-  line-height: 32px;
-  border-radius: 6px;
-  border: 1px solid #dfe4ea;
+  line-height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
   font-size: 14px;
-  background: #fafbfc;
+  background: var(--panel-strong);
+  box-shadow: inset 0 1px 2px rgba(18, 20, 25, 0.06);
 }
 
 input:focus,
 select:focus {
-  outline: 2px solid rgba(255, 193, 7, 0.4);
-  border-color: #f5b917;
+  outline: 2px solid rgba(14, 165, 233, 0.25);
+  border-color: rgba(14, 165, 233, 0.7);
 }
 
 .help {
@@ -394,11 +409,11 @@ select:focus {
   gap: 10px;
   margin-top: 12px;
   font-size: 12px;
-  color: #6b717a;
+  color: var(--muted);
 }
 
 .help a {
-  color: #1f6f3e;
+  color: #0f766e;
 }
 
 .preset {
@@ -408,14 +423,14 @@ select:focus {
   align-items: center;
   margin: 12px 0;
   font-size: 12px;
-  color: #6b717a;
+  color: var(--muted);
 }
 
 .preset button {
-  border: 1px solid #e4e7ec;
-  background: #fffdf6;
-  border-radius: 6px;
-  padding: 4px 10px;
+  border: 1px solid rgba(15, 118, 110, 0.35);
+  background: rgba(15, 118, 110, 0.08);
+  border-radius: 999px;
+  padding: 4px 12px;
   cursor: pointer;
   font-size: 12px;
 }
@@ -436,8 +451,8 @@ select:focus {
 .segmented {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  border-radius: 6px;
-  background: #f1f4f7;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.06);
   padding: 4px;
   margin-bottom: 12px;
 }
@@ -445,17 +460,17 @@ select:focus {
 .segmented button {
   border: none;
   background: transparent;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 9px 10px;
+  border-radius: 10px;
   cursor: pointer;
   font-weight: 600;
-  color: #6b717a;
+  color: var(--muted);
 }
 
 .segmented button.active {
-  background: #ffffff;
-  color: #1d1f22;
-  box-shadow: 0 6px 12px rgba(18, 20, 25, 0.08);
+  background: var(--panel-strong);
+  color: var(--ink);
+  box-shadow: 0 10px 18px rgba(18, 20, 25, 0.1);
 }
 
 .field-group {
@@ -465,45 +480,51 @@ select:focus {
 .checkbox {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: 13px;
-  color: #374151;
+  color: var(--ink);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(14, 165, 233, 0.08);
+  border: 1px solid rgba(14, 165, 233, 0.2);
 }
 
 .checkbox input {
-  width: 16px;
-  height: 16px;
-  accent-color: #2563eb;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
 }
 
 .hint {
   margin-top: 14px;
   font-size: 12px;
-  color: #6b717a;
+  color: var(--muted);
 }
 
 .inline-note {
   display: inline-block;
   margin-top: 6px;
   font-size: 12px;
-  color: #8a9099;
+  color: #7a8695;
 }
 
 
 .primary,
 .ghost,
 .mini,
-.icon {
+.icon,
+.link {
   font-family: inherit;
 }
 
 .primary {
-  background: #2563eb;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
   color: #fff;
   border: none;
-  border-radius: 6px;
-  padding: 8px 12px;
+  border-radius: 10px;
+  padding: 9px 14px;
   cursor: pointer;
+  box-shadow: 0 10px 18px rgba(14, 165, 233, 0.28);
 }
 
 .primary:disabled {
@@ -512,19 +533,19 @@ select:focus {
 }
 
 .ghost {
-  background: #f2f4f7;
-  color: #111;
+  background: rgba(15, 23, 42, 0.06);
+  color: #111827;
   border: none;
-  border-radius: 6px;
-  padding: 8px 12px;
+  border-radius: 10px;
+  padding: 9px 14px;
   cursor: pointer;
 }
 
 .mini {
   border: none;
-  background: #2563eb;
+  background: var(--accent);
   color: #fff;
-  border-radius: 6px;
+  border-radius: 999px;
   padding: 6px 10px;
   cursor: pointer;
   font-size: 12px;
@@ -532,11 +553,21 @@ select:focus {
 
 .icon {
   border: none;
-  background: #f8e1e0;
-  color: #a11918;
-  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #b42318;
+  border-radius: 10px;
   padding: 6px 10px;
   cursor: pointer;
+}
+
+.link {
+  border: none;
+  background: transparent;
+  color: #b42318;
+  padding: 0;
+  cursor: pointer;
+  text-underline-offset: 3px;
+  font-size: 12px;
 }
 
 .footer {
@@ -544,7 +575,7 @@ select:focus {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: #6b717a;
+  color: var(--muted);
   font-size: 12px;
 }
 </style>
