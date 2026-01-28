@@ -73,6 +73,8 @@ struct QuoteSettings {
     rotate_seconds: u64,
     #[serde(default)]
     fixed_symbol: Option<String>,
+    #[serde(default)]
+    use_system_proxy: bool,
 }
 
 impl Default for QuoteSettings {
@@ -85,6 +87,7 @@ impl Default for QuoteSettings {
             refresh_seconds: default_refresh_seconds(),
             rotate_seconds: default_rotate_seconds(),
             fixed_symbol: None,
+            use_system_proxy: false,
         }
     }
 }
@@ -250,6 +253,7 @@ async fn fetch_batch_quotes(
     token: &str,
     codes: &[String],
     api_type: ApiType,
+    use_system_proxy: bool,
 ) -> Result<HashMap<String, (f64, u64, f64)>, String> {
     let endpoint = match api_type {
         ApiType::Commodity => "https://quote.alltick.io/quote-b-api/batch-kline",
@@ -278,7 +282,11 @@ async fn fetch_batch_quotes(
         "data": { "data_list": data_list }
     });
 
-    let proxy_setting = system_proxy_setting();
+    let proxy_setting = if use_system_proxy {
+        system_proxy_setting()
+    } else {
+        None
+    };
     log_proxy_decision(proxy_setting.as_ref());
     let request_started = Instant::now();
     let payload = match send_batch_request(proxy_setting.as_ref(), url, &body).await {
@@ -657,7 +665,14 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                 } else {
                     let codes: Vec<String> =
                         settings.symbols.iter().map(|symbol| symbol.code.clone()).collect();
-                    match fetch_batch_quotes(&settings.token, &codes, settings.api_type).await {
+                    match fetch_batch_quotes(
+                        &settings.token,
+                        &codes,
+                        settings.api_type,
+                        settings.use_system_proxy,
+                    )
+                    .await
+                    {
                         Ok(map) => {
                             for symbol in &settings.symbols {
                                 if let Some((price, _ts, open)) = map.get(&symbol.code) {

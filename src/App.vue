@@ -18,6 +18,7 @@ type QuoteSettings = {
   refresh_seconds: number;
   rotate_seconds: number;
   fixed_symbol: string | null;
+  use_system_proxy: boolean;
 };
 
 const win = getCurrentWindow();
@@ -36,6 +37,7 @@ const settings = ref<QuoteSettings>({
   refresh_seconds: 10,
   rotate_seconds: 10,
   fixed_symbol: null,
+  use_system_proxy: false,
 });
 
 const symbolOptions = computed(() =>
@@ -169,6 +171,12 @@ async function closeWindow() {
               target="_blank"
           >获取 Token</a
           >
+        </div>
+        <div class="field-group">
+          <label class="checkbox">
+            <input type="checkbox" v-model="settings.use_system_proxy" />
+            <span>使用系统代理</span>
+          </label>
         </div>
       </article>
 
@@ -452,6 +460,20 @@ select:focus {
 
 .field-group {
   margin-top: 12px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #374151;
+}
+
+.checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
 }
 
 .hint {
