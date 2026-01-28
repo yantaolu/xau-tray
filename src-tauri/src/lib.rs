@@ -13,6 +13,7 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager,
 };
+use tauri_plugin_opener::OpenerExt;
 
 const ROTATE_MIN_SECONDS: u64 = 3;
 const SETTINGS_FILE: &str = "settings.json";
@@ -789,8 +790,10 @@ pub fn run() {
 
             let settings_menu =
                 MenuItem::with_id(app, "settings", "设置", true, Option::<&str>::None)?;
+            let about_menu =
+                MenuItem::with_id(app, "about", "关于", true, Option::<&str>::None)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, Option::<&str>::None)?;
-            let menu = Menu::with_items(app, &[&settings_menu, &quit])?;
+            let menu = Menu::with_items(app, &[&settings_menu, &about_menu, &quit])?;
 
             let tray = TrayIconBuilder::with_id("xau-tray")
                 .title("盯价助手")
@@ -803,6 +806,10 @@ pub fn run() {
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
+                    } else if event.id() == "about" {
+                        let _ = app
+                            .opener()
+                            .open_url("https://github.com/yantaolu/xau-tray", None::<&str>);
                     } else if event.id() == "quit" {
                         app.exit(0);
                     }
