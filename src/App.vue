@@ -569,13 +569,4 @@ select:focus {
   text-underline-offset: 3px;
   font-size: 12px;
 }
-
-.footer {
-  margin-top: 24px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: var(--muted);
-  font-size: 12px;
-}
 </style>
