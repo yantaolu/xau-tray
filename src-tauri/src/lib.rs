@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager,
@@ -289,15 +290,8 @@ fn format_title(symbol: &SymbolItem, price: Option<f64>, trend: Option<&str>) ->
     } else {
         symbol.label.as_str()
     };
-    let trend = match trend {
-        Some("▲") => "🟩",
-        Some("▼") => "🟥",
-        Some("—") => "⚠️",
-        Some(other) => other,
-        None => "⚠️",
-    };
     match (trend, price) {
-        (trend, Some(price)) => format!("{trend} {name} {price:.2}"),
+        (_, Some(price)) => format!("{name} {price:.2}"),
         _ => format!("{name} --"),
     }
 }
@@ -323,6 +317,16 @@ fn pick_display_symbol<'a>(
 
 fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSettings>>) {
     tauri::async_runtime::spawn(async move {
+        let up_icon = Image::from_bytes(include_bytes!("../icons/status/up.png"))
+            .ok()
+            .map(|img| img.to_owned());
+        let down_icon = Image::from_bytes(include_bytes!("../icons/status/down.png"))
+            .ok()
+            .map(|img| img.to_owned());
+        let pending_icon = Image::from_bytes(include_bytes!("../icons/status/pending.png"))
+            .ok()
+            .map(|img| img.to_owned());
+
         let mut last_prices: HashMap<String, f64> = HashMap::new();
         let mut trends: HashMap<String, String> = HashMap::new();
         let mut rotate_index: usize = 0;
@@ -339,6 +343,9 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
             if settings.symbols.is_empty() {
                 let _ = tray.set_title(Some("No symbols".to_string()));
                 let _ = tray.set_tooltip(Some("请在设置中添加品类".to_string()));
+                if let Some(icon) = pending_icon.clone() {
+                    let _ = tray.set_icon(Some(icon));
+                }
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
@@ -353,6 +360,9 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                 if settings.token.is_empty() {
                     let _ = tray.set_title(Some("设置 Token".to_string()));
                     let _ = tray.set_tooltip(Some("请先在设置中填写 Alltick Token".to_string()));
+                    if let Some(icon) = pending_icon.clone() {
+                        let _ = tray.set_icon(Some(icon));
+                    }
                 } else {
                     let codes: Vec<String> =
                         settings.symbols.iter().map(|symbol| symbol.code.clone()).collect();
@@ -398,11 +408,22 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                             last_title.push('*');
                             let _ = tray.set_title(Some(last_title.clone()));
                         }
+                        if let Some(icon) = pending_icon.clone() {
+                            let _ = tray.set_icon(Some(icon));
+                        }
                     } else if let Some(symbol) = pick_display_symbol(&settings, rotate_index) {
                         let trend = trends.get(&symbol.code).map(|s| s.as_str());
                         let price = last_prices.get(&symbol.code).copied();
                         last_title = format_title(symbol, price, trend);
                         let _ = tray.set_title(Some(last_title.clone()));
+                        let icon = match trend {
+                            Some("▲") => up_icon.clone(),
+                            Some("▼") => down_icon.clone(),
+                            _ => pending_icon.clone(),
+                        };
+                        if let Some(icon) = icon {
+                            let _ = tray.set_icon(Some(icon));
+                        }
                     }
                 }
             }
@@ -415,6 +436,14 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                     let price = last_prices.get(&symbol.code).copied();
                     last_title = format_title(symbol, price, trend);
                     let _ = tray.set_title(Some(last_title.clone()));
+                    let icon = match trend {
+                        Some("▲") => up_icon.clone(),
+                        Some("▼") => down_icon.clone(),
+                        _ => pending_icon.clone(),
+                    };
+                    if let Some(icon) = icon {
+                        let _ = tray.set_icon(Some(icon));
+                    }
                 }
             }
 
@@ -457,7 +486,7 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&settings_menu, &quit])?;
 
             let tray = TrayIconBuilder::with_id("xau-tray")
-                .title("贵金行情")
+                .title("盯价助手")
                 .tooltip("请先进行必要的设置")
                 .menu(&menu)
                 .show_menu_on_left_click(true)

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "贵金行情",
+  "productName": "盯价助手",
   "version": "0.1.0",
   "identifier": "com.luyantao.xau-tray",
   "build": {
