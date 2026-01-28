@@ -149,15 +149,6 @@ async function closeWindow() {
 
 <template>
   <main class="shell">
-    <header class="hero">
-      <div class="hero-actions">
-        <button class="primary" type="button" :disabled="saving" @click="save">
-          {{ saving ? "保存中..." : "保存设置" }}
-        </button>
-        <button class="ghost" type="button" @click="closeWindow">关闭</button>
-      </div>
-    </header>
-
     <section class="grid">
       <article class="card">
         <div class="card-head">
@@ -216,7 +207,6 @@ async function closeWindow() {
         <div class="card-head">
           <div>
             <h2>展示方式</h2>
-            <p>支持轮播或固定显示单一品类</p>
           </div>
         </div>
         <div class="segmented">
@@ -266,13 +256,20 @@ async function closeWindow() {
         <p class="hint">状态栏悬浮会显示全部品类最新价格。</p>
       </article>
     </section>
+    <footer class="hero">
+      <div class="hero-actions">
+        <button class="primary" type="button" :disabled="saving" @click="save">
+          {{ saving ? "保存中..." : "保存设置" }}
+        </button>
+        <button class="ghost" type="button" @click="closeWindow">关闭</button>
+      </div>
+    </footer>
   </main>
 </template>
 
 <style>
 :root {
   color-scheme: light;
-  background-color: #ffffff;
 }
 
 :root, html, body {
@@ -285,7 +282,6 @@ async function closeWindow() {
 
 body {
   margin: 0;
-  background: #ffffff;
   overflow-y: auto;
 }
 
@@ -294,70 +290,30 @@ body {
 }
 
 #app {
-  background: #ffffff;
+  background: #f4f6f8;
 }
 </style>
 
 <style scoped>
 .shell {
   min-height: 100vh;
-  padding: 12px 28px 40px;
+  padding: 16px 16px 76px;
   font-family: "Avenir Next", "Futura", "Helvetica Neue", sans-serif;
-  color: #17181a;
+  color: #333;
   position: relative;
   overflow: hidden;
-  background: #ffffff;
-}
-
-.header-veil {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 60px;
-  background: #ffffff;
-  z-index: 10;
-  pointer-events: none;
-}
-
-.glow {
-  position: absolute;
-  inset: -40% 20% auto;
-  height: 320px;
-  background: radial-gradient(circle, rgba(255, 193, 7, 0.25), transparent 70%);
-  filter: blur(10px);
-  pointer-events: none;
 }
 
 .hero {
   position: fixed;
-  top: 0;
+  bottom: 0;
   left: 0;
   right: 0;
   padding: 12px 28px;
   z-index: 1;
   background: #ffffff;
-  border: 1px solid #eef0f3;
-  box-shadow: 0 5px 10px rgba(18, 20, 25, 0.08);
-}
-
-.eyebrow {
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  font-size: 12px;
-  color: #6a6f77;
-  margin-bottom: 8px;
-}
-
-h1 {
-  margin: 0 0 8px;
-  font-size: 28px;
-  font-weight: 700;
-}
-
-.sub {
-  margin: 0;
-  color: #4f5660;
+  border-top: 1px solid #eef0f3;
+  box-shadow: 0 -5px 10px rgba(18, 20, 25, 0.08);
 }
 
 .hero-actions {
@@ -375,8 +331,7 @@ h1 {
 .grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 18px;
-  margin-top: 56px;
+  gap: 16px;
 }
 
 .card {
@@ -397,12 +352,6 @@ h1 {
 .card-head h2 {
   margin: 0;
   font-size: 18px;
-}
-
-.card-head p {
-  margin: 6px 0 0;
-  color: #6c737c;
-  font-size: 13px;
 }
 
 .label {
@@ -430,13 +379,6 @@ input:focus,
 select:focus {
   outline: 2px solid rgba(255, 193, 7, 0.4);
   border-color: #f5b917;
-}
-
-.link {
-  font-size: 12px;
-  text-decoration: none;
-  color: #1f6f3e;
-  border-bottom: 1px solid rgba(31, 111, 62, 0.3);
 }
 
 .help {
