@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import {computed, onMounted, onUnmounted, ref, watch} from "vue";
+import {invoke} from "@tauri-apps/api/core";
+import {getCurrentWindow} from "@tauri-apps/api/window";
 
 type DisplayMode = "rotate" | "fixed";
 
@@ -14,6 +14,7 @@ type QuoteSettings = {
   token: string;
   symbols: SymbolItem[];
   display_mode: DisplayMode;
+  api_type: "commodity" | "stock";
   refresh_seconds: number;
   rotate_seconds: number;
   fixed_symbol: string | null;
@@ -26,23 +27,24 @@ const status = ref("");
 const settings = ref<QuoteSettings>({
   token: "",
   symbols: [
-    { code: "XAUUSD", label: "黄金" },
-    { code: "Silver", label: "白银" },
-    { code: "BTCUSDT", label: "比特币" },
+    {code: "XAUUSD", label: "黄金"},
+    {code: "Silver", label: "白银"},
+    {code: "BTCUSDT", label: "比特币"},
   ],
   display_mode: "rotate",
+  api_type: "commodity",
   refresh_seconds: 10,
   rotate_seconds: 10,
   fixed_symbol: null,
 });
 
 const symbolOptions = computed(() =>
-  settings.value.symbols
-    .map((item) => ({
-      value: item.code.trim(),
-      label: item.label.trim() || item.code.trim(),
-    }))
-    .filter((item) => item.value)
+    settings.value.symbols
+        .map((item) => ({
+          value: item.code.trim(),
+          label: item.label.trim() || item.code.trim(),
+        }))
+        .filter((item) => item.value)
 );
 
 async function loadSettings() {
@@ -68,7 +70,7 @@ onUnmounted(() => {
 });
 
 function addSymbol() {
-  settings.value.symbols.push({ code: "", label: "" });
+  settings.value.symbols.push({code: "", label: ""});
 }
 
 function removeSymbol(index: number) {
@@ -77,10 +79,10 @@ function removeSymbol(index: number) {
 
 function addPreset(code: string, label: string) {
   const exists = settings.value.symbols.some(
-    (item) => item.code.trim() === code
+      (item) => item.code.trim() === code
   );
   if (!exists) {
-    settings.value.symbols.push({ code, label });
+    settings.value.symbols.push({code, label});
   }
 }
 
@@ -91,6 +93,40 @@ function setDisplayMode(mode: DisplayMode) {
     settings.value.fixed_symbol = first || null;
   }
 }
+
+function applyStockDefaults() {
+  settings.value.symbols = [
+    {code: "000001.SH", label: "上证指数"},
+    {code: "HSI.HK", label: "恒生指数"},
+    {code: ".IXIC.US", label: "纳斯达克指数"},
+  ];
+  if (settings.value.display_mode === "fixed") {
+    settings.value.fixed_symbol = settings.value.symbols[0]?.code ?? null;
+  }
+}
+
+function applyCommodityDefaults() {
+  settings.value.symbols = [
+    {code: "XAUUSD", label: "黄金"},
+    {code: "Silver", label: "白银"},
+    {code: "BTCUSDT", label: "比特币"},
+  ];
+  if (settings.value.display_mode === "fixed") {
+    settings.value.fixed_symbol = settings.value.symbols[0]?.code ?? null;
+  }
+}
+
+watch(
+    () => settings.value.api_type,
+    (next, prev) => {
+      if (next === prev) return;
+      if (next === "stock") {
+        applyStockDefaults();
+      } else {
+        applyCommodityDefaults();
+      }
+    }
+);
 
 async function save() {
   saving.value = true;
@@ -114,9 +150,6 @@ async function closeWindow() {
 <template>
   <main class="shell">
     <header class="hero">
-        <p class="sub">
-          配置 Token、行情品类与展示方式，让状态栏持续显示你关心的价格。
-        </p>
       <div class="hero-actions">
         <button class="primary" type="button" :disabled="saving" @click="save">
           {{ saving ? "保存中..." : "保存设置" }}
@@ -129,26 +162,22 @@ async function closeWindow() {
       <article class="card">
         <div class="card-head">
           <div>
-            <h2>数据源</h2>
-            <p>Alltick 实时行情接口</p>
+            <h2>AllTick API Token</h2>
           </div>
-          <a class="link" href="https://alltick.co/zh-CN" target="_blank">官网</a>
         </div>
-        <label class="label" for="token-input">API Token</label>
         <input
-          id="token-input"
-          v-model="settings.token"
-          placeholder="粘贴你的 Alltick Token"
-          autocomplete="off"
-          spellcheck="false"
+            id="token-input"
+            v-model="settings.token"
+            placeholder="粘贴你的 Alltick Token"
+            autocomplete="off"
+            spellcheck="false"
         />
         <div class="help">
           <a
-            href="https://apis.alltick.co/integration-process/token-application"
-            target="_blank"
-            >获取 Token</a
+              href="https://apis.alltick.co/integration-process/token-application"
+              target="_blank"
+          >获取 Token</a
           >
-          <span>保存后自动生效</span>
         </div>
       </article>
 
@@ -156,20 +185,28 @@ async function closeWindow() {
         <div class="card-head">
           <div>
             <h2>行情品类</h2>
-            <p>可添加多个品类，状态栏按设置展示</p>
           </div>
           <button class="mini" type="button" @click="addSymbol">+ 添加</button>
         </div>
+        <label class="label" for="api-type">AllTick 实时行情接口类型</label>
+        <select id="api-type" v-model="settings.api_type">
+          <option value="commodity">商品（贵金属/加密/原油等）</option>
+          <option value="stock">股票（美股/港股/A股）</option>
+        </select>
         <div class="preset">
+          <div class="help" style="margin: 0">
+            <a href="https://apis.alltick.co/integration-process/product-code-list" target="_blank">产品列表</a>
+          </div>
           <span>常用：</span>
           <button type="button" @click="addPreset('XAUUSD', '黄金')">黄金</button>
           <button type="button" @click="addPreset('Silver', '白银')">白银</button>
           <button type="button" @click="addPreset('BTCUSDT', '比特币')">比特币</button>
         </div>
+
         <div class="symbols">
           <div v-for="(symbol, index) in settings.symbols" :key="index" class="symbol-row">
-            <input v-model="symbol.label" placeholder="名称" />
-            <input v-model="symbol.code" placeholder="编码，如 XAUUSD" />
+            <input v-model="symbol.label" placeholder="名称"/>
+            <input v-model="symbol.code" placeholder="编码，如 XAUUSD"/>
             <button class="icon" type="button" @click="removeSymbol(index)">移除</button>
           </div>
         </div>
@@ -184,16 +221,16 @@ async function closeWindow() {
         </div>
         <div class="segmented">
           <button
-            type="button"
-            :class="{ active: settings.display_mode === 'rotate' }"
-            @click="setDisplayMode('rotate')"
+              type="button"
+              :class="{ active: settings.display_mode === 'rotate' }"
+              @click="setDisplayMode('rotate')"
           >
             轮播
           </button>
           <button
-            type="button"
-            :class="{ active: settings.display_mode === 'fixed' }"
-            @click="setDisplayMode('fixed')"
+              type="button"
+              :class="{ active: settings.display_mode === 'fixed' }"
+              @click="setDisplayMode('fixed')"
           >
             固定
           </button>
@@ -201,21 +238,21 @@ async function closeWindow() {
         <div class="field-group">
           <label class="label" for="refresh-seconds">行情刷新间隔（秒）</label>
           <input
-            id="refresh-seconds"
-            type="number"
-            min="10"
-            v-model.number="settings.refresh_seconds"
+              id="refresh-seconds"
+              type="number"
+              min="10"
+              v-model.number="settings.refresh_seconds"
           />
           <span class="inline-note">免费模式最快 10 秒刷新</span>
         </div>
-        <div class="field-group">
+        <div v-if="settings.display_mode === 'rotate'" class="field-group">
           <label class="label" for="rotate-seconds">轮播切换间隔（秒）</label>
           <input
-            id="rotate-seconds"
-            type="number"
-            min="3"
-            max="3600"
-            v-model.number="settings.rotate_seconds"
+              id="rotate-seconds"
+              type="number"
+              min="3"
+              max="3600"
+              v-model.number="settings.rotate_seconds"
           />
         </div>
         <div v-if="settings.display_mode === 'fixed'" class="field-group">
@@ -235,7 +272,7 @@ async function closeWindow() {
 <style>
 :root {
   color-scheme: light;
-  background-color: #eef1f5;
+  background-color: #ffffff;
 }
 
 :root, html, body {
@@ -248,7 +285,7 @@ async function closeWindow() {
 
 body {
   margin: 0;
-  background: #eef1f5;
+  background: #ffffff;
   overflow-y: auto;
 }
 
@@ -257,7 +294,7 @@ body {
 }
 
 #app {
-  background: #eef1f5;
+  background: #ffffff;
 }
 </style>
 
@@ -269,7 +306,7 @@ body {
   color: #17181a;
   position: relative;
   overflow: hidden;
-  background: #eef1f5;
+  background: #ffffff;
 }
 
 .header-veil {
@@ -278,7 +315,7 @@ body {
   left: 0;
   right: 0;
   height: 60px;
-  background: #eef1f5;
+  background: #ffffff;
   z-index: 10;
   pointer-events: none;
 }
@@ -299,7 +336,9 @@ body {
   right: 0;
   padding: 12px 28px;
   z-index: 1;
-  background: #eef1f5;
+  background: #ffffff;
+  border: 1px solid #eef0f3;
+  box-shadow: 0 5px 10px rgba(18, 20, 25, 0.08);
 }
 
 .eyebrow {
@@ -322,18 +361,22 @@ h1 {
 }
 
 .hero-actions {
-  margin-top: 24px;
   display: flex;
   flex-direction: row;
-  gap: 10px;
+  justify-content: flex-end;
+  gap: 12px;
   flex-wrap: wrap;
+}
+
+.hero-actions button {
+  width: 75px;
 }
 
 .grid {
   display: grid;
   grid-template-columns: 1fr;
   gap: 18px;
-  margin-top: 107px;
+  margin-top: 56px;
 }
 
 .card {
@@ -399,7 +442,7 @@ select:focus {
 .help {
   display: flex;
   gap: 10px;
-  margin-top: 10px;
+  margin-top: 12px;
   font-size: 12px;
   color: #6b717a;
 }
@@ -413,7 +456,7 @@ select:focus {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin-bottom: 12px;
+  margin: 12px 0;
   font-size: 12px;
   color: #6b717a;
 }
@@ -482,6 +525,7 @@ select:focus {
   color: #8a9099;
 }
 
+
 .primary,
 .ghost,
 .mini,
@@ -494,7 +538,7 @@ select:focus {
   color: #fff;
   border: none;
   border-radius: 6px;
-  padding: 10px 16px;
+  padding: 8px 12px;
   cursor: pointer;
 }
 
@@ -508,7 +552,7 @@ select:focus {
   color: #111;
   border: none;
   border-radius: 6px;
-  padding: 10px 16px;
+  padding: 8px 12px;
   cursor: pointer;
 }
 
@@ -538,22 +582,5 @@ select:focus {
   align-items: center;
   color: #6b717a;
   font-size: 12px;
-}
-
-@media (max-width: 700px) {
-  .hero-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .symbol-row {
-    grid-template-columns: 1fr;
-  }
-
-  .footer {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
 }
 </style>

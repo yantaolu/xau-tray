@@ -28,6 +28,19 @@ enum DisplayMode {
     Fixed,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+enum ApiType {
+    Commodity,
+    Stock,
+}
+
+impl Default for ApiType {
+    fn default() -> Self {
+        Self::Commodity
+    }
+}
+
 impl Default for DisplayMode {
     fn default() -> Self {
         Self::Rotate
@@ -50,6 +63,8 @@ struct QuoteSettings {
     symbols: Vec<SymbolItem>,
     #[serde(default)]
     display_mode: DisplayMode,
+    #[serde(default)]
+    api_type: ApiType,
     #[serde(default = "default_refresh_seconds")]
     refresh_seconds: u64,
     #[serde(default = "default_rotate_seconds")]
@@ -64,6 +79,7 @@ impl Default for QuoteSettings {
             token: String::new(),
             symbols: default_symbols(),
             display_mode: DisplayMode::Rotate,
+            api_type: ApiType::Commodity,
             refresh_seconds: default_refresh_seconds(),
             rotate_seconds: default_rotate_seconds(),
             fixed_symbol: None,
@@ -113,6 +129,23 @@ fn default_symbols() -> Vec<SymbolItem> {
         SymbolItem {
             code: "BTCUSDT".into(),
             label: "比特币".into(),
+        },
+    ]
+}
+
+fn default_stock_symbols() -> Vec<SymbolItem> {
+    vec![
+        SymbolItem {
+            code: "000001.SH".into(),
+            label: "上证指数".into(),
+        },
+        SymbolItem {
+            code: "HSI.HK".into(),
+            label: "恒生指数".into(),
+        },
+        SymbolItem {
+            code: ".IXIC.US".into(),
+            label: "纳斯达克指数".into(),
         },
     ]
 }
@@ -175,7 +208,10 @@ fn normalize_settings(mut settings: QuoteSettings) -> QuoteSettings {
     }
 
     if symbols.is_empty() {
-        symbols = default_symbols();
+        symbols = match settings.api_type {
+            ApiType::Commodity => default_symbols(),
+            ApiType::Stock => default_stock_symbols(),
+        };
     }
 
     settings.symbols = symbols;
@@ -203,9 +239,13 @@ fn normalize_settings(mut settings: QuoteSettings) -> QuoteSettings {
 async fn fetch_batch_quotes(
     token: &str,
     codes: &[String],
+    api_type: ApiType,
 ) -> Result<HashMap<String, (f64, u64, f64)>, String> {
-    let mut url = reqwest::Url::parse("https://quote.alltick.io/quote-b-api/batch-kline")
-        .map_err(|e| e.to_string())?;
+    let endpoint = match api_type {
+        ApiType::Commodity => "https://quote.alltick.io/quote-b-api/batch-kline",
+        ApiType::Stock => "https://quote.alltick.io/quote-stock-b-api/batch-kline",
+    };
+    let mut url = reqwest::Url::parse(endpoint).map_err(|e| e.to_string())?;
 
     url.query_pairs_mut().append_pair("token", token);
 
@@ -366,7 +406,7 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                 } else {
                     let codes: Vec<String> =
                         settings.symbols.iter().map(|symbol| symbol.code.clone()).collect();
-                    match fetch_batch_quotes(&settings.token, &codes).await {
+                    match fetch_batch_quotes(&settings.token, &codes, settings.api_type).await {
                         Ok(map) => {
                             for symbol in &settings.symbols {
                                 if let Some((price, _ts, open)) = map.get(&symbol.code) {
