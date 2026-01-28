@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
+    error::Error,
     fs,
+    process::Command,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -160,6 +162,14 @@ fn legacy_token_file_path(app: &AppHandle) -> Result<std::path::PathBuf, String>
     Ok(base.join("token.txt"))
 }
 
+#[cfg(debug_assertions)]
+fn log_line(message: &str) {
+    println!("{message}");
+}
+
+#[cfg(not(debug_assertions))]
+fn log_line(_message: &str) {}
+
 fn load_settings(app: &AppHandle) -> QuoteSettings {
     let mut settings = if let Ok(path) = settings_file_path(app) {
         fs::read_to_string(path)
@@ -268,15 +278,35 @@ async fn fetch_batch_quotes(
         "data": { "data_list": data_list }
     });
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let payload = resp.json::<BatchResp>().await.map_err(|e| e.to_string())?;
+    let proxy_setting = system_proxy_setting();
+    log_proxy_decision(proxy_setting.as_ref());
+    let request_started = Instant::now();
+    let payload = match send_batch_request(proxy_setting.as_ref(), url, &body).await {
+        Ok(payload) => {
+            let elapsed_ms = request_started.elapsed().as_millis();
+            log_line(&format!(
+                "[xau-tray] request result: success ret={} items={} elapsed_ms={}",
+                payload.ret,
+                payload.data.kline_list.len(),
+                elapsed_ms
+            ));
+            payload
+        }
+        Err(err) => {
+            let elapsed_ms = request_started.elapsed().as_millis();
+            log_line(&format!(
+                "[xau-tray] request result: failed error={} elapsed_ms={}",
+                err, elapsed_ms
+            ));
+            return Err(err);
+        }
+    };
     if payload.ret != 200 {
+        log_line(&format!(
+            "[xau-tray] request result: failed ret={} items={}",
+            payload.ret,
+            payload.data.kline_list.len()
+        ));
         return Err("bad payload".into());
     }
 
@@ -293,6 +323,223 @@ async fn fetch_batch_quotes(
         }
     }
     Ok(map)
+}
+
+#[derive(Clone)]
+struct ProxySetting {
+    url: String,
+    source: &'static str,
+    no_proxy: Option<String>,
+}
+
+fn build_http_client(proxy_setting: Option<&ProxySetting>) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(10));
+    if let Some(proxy_setting) = proxy_setting {
+        let mut proxy = reqwest::Proxy::all(proxy_setting.url.clone()).map_err(|e| e.to_string())?;
+        let no_proxy = proxy_setting
+            .no_proxy
+            .as_ref()
+            .and_then(|list| reqwest::NoProxy::from_string(list));
+        proxy = proxy.no_proxy(no_proxy.or_else(reqwest::NoProxy::from_env));
+        builder = builder.proxy(proxy);
+    } else {
+        builder = builder.no_proxy();
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+fn system_proxy_setting() -> Option<ProxySetting> {
+    #[cfg(target_os = "macos")]
+    if let Some((url, no_proxy)) = macos_system_proxy_url() {
+        return Some(ProxySetting {
+            url,
+            source: "system",
+            no_proxy,
+        });
+    }
+
+    env_proxy_setting().map(|url| ProxySetting {
+        url,
+        source: "env",
+        no_proxy: None,
+    })
+}
+
+fn env_proxy_setting() -> Option<String> {
+    const KEYS: [&str; 6] = [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ];
+    for key in KEYS {
+        if let Ok(value) = std::env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_system_proxy_url() -> Option<(String, Option<String>)> {
+    let output = Command::new("scutil").arg("--proxy").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let url = parse_scutil_proxy(&text)?;
+    let no_proxy = parse_scutil_no_proxy(&text);
+    Some((url, no_proxy))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_system_proxy_url() -> Option<(String, Option<String>)> {
+    None
+}
+
+fn parse_scutil_proxy(text: &str) -> Option<String> {
+    scutil_proxy_url(text, "HTTPSEnable", "HTTPSProxy", "HTTPSPort", "http")
+        .or_else(|| scutil_proxy_url(text, "HTTPEnable", "HTTPProxy", "HTTPPort", "http"))
+        .or_else(|| scutil_proxy_url(text, "SOCKSEnable", "SOCKSProxy", "SOCKSPort", "socks5"))
+}
+
+fn scutil_proxy_url(
+    text: &str,
+    enabled_key: &str,
+    host_key: &str,
+    port_key: &str,
+    scheme: &str,
+) -> Option<String> {
+    let enabled = scutil_value(text, enabled_key)?.parse::<u8>().ok()?;
+    if enabled == 0 {
+        return None;
+    }
+    let host = scutil_value(text, host_key)?;
+    if host.is_empty() {
+        return None;
+    }
+    let port = scutil_value(text, port_key)?.parse::<u16>().ok()?;
+    if port == 0 {
+        return None;
+    }
+    Some(format!("{scheme}://{host}:{port}"))
+}
+
+fn scutil_value(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with(key) {
+            if let Some((_, value)) = line.split_once(':') {
+                return Some(value.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+fn parse_scutil_no_proxy(text: &str) -> Option<String> {
+    let mut values: Vec<String> = Vec::new();
+    let mut in_list = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with("ExceptionsList") {
+            in_list = true;
+            continue;
+        }
+        if in_list {
+            if line.starts_with('}') {
+                break;
+            }
+            if let Some((_, value)) = line.split_once(':') {
+                let item = value.trim();
+                if !item.is_empty() {
+                    values.push(item.to_string());
+                }
+            }
+        }
+    }
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.join(","))
+    }
+}
+
+fn log_proxy_decision(proxy_setting: Option<&ProxySetting>) {
+    if let Some(proxy_setting) = proxy_setting {
+        log_line(&format!(
+            "[xau-tray] network mode: system proxy enabled ({})",
+            proxy_setting.source
+        ));
+    } else {
+        log_line("[xau-tray] network mode: direct connection");
+    }
+}
+
+async fn send_batch_request(
+    proxy_setting: Option<&ProxySetting>,
+    url: reqwest::Url,
+    body: &serde_json::Value,
+) -> Result<BatchResp, String> {
+    let client = build_http_client(proxy_setting)?;
+    let resp = client
+        .post(url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format_reqwest_error(&e))?;
+    let status = resp.status();
+    let body_text = resp
+        .text()
+        .await
+        .map_err(|e| format_reqwest_error(&e))?;
+    if !status.is_success() {
+        return Err(format!("http status {status} body={body_text}"));
+    }
+    serde_json::from_str::<BatchResp>(&body_text).map_err(|e| e.to_string())
+}
+
+fn format_reqwest_error(err: &reqwest::Error) -> String {
+    let mut details = err.to_string();
+    let mut tags: Vec<String> = Vec::new();
+    if err.is_timeout() {
+        tags.push("timeout".to_string());
+    }
+    if err.is_connect() {
+        tags.push("connect".to_string());
+    }
+    if err.is_request() {
+        tags.push("request".to_string());
+    }
+    if err.is_body() {
+        tags.push("body".to_string());
+    }
+    if err.is_decode() {
+        tags.push("decode".to_string());
+    }
+    if let Some(status) = err.status() {
+        tags.push(format!("status={status}"));
+    }
+    if !tags.is_empty() {
+        details = format!("{details} ({})", tags.join(", "));
+    }
+
+    let mut causes = Vec::new();
+    let mut source = err.source();
+    while let Some(src) = source {
+        causes.push(src.to_string());
+        source = src.source();
+    }
+    if !causes.is_empty() {
+        details = format!("{details}; causes: {}", causes.join(" | "));
+    }
+
+    details
 }
 
 #[tauri::command]
@@ -395,7 +642,11 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
             }
 
             if now >= next_refresh {
-                next_refresh = now + refresh_interval;
+                let now = chrono::Local::now();
+                log_line(&format!(
+                    "[xau-tray] request tick: {}",
+                    now.format("%Y-%m-%d %H:%M:%S")
+                ));
                 let mut success = 0;
                 if settings.token.is_empty() {
                     let _ = tray.set_title(Some("设置 Token".to_string()));
@@ -466,6 +717,7 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                         }
                     }
                 }
+                next_refresh = Instant::now() + refresh_interval;
             }
 
             if settings.display_mode == DisplayMode::Rotate && now >= next_rotate {
