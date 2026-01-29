@@ -156,10 +156,11 @@ async function closeWindow() {
             <h2>AllTick API Token</h2>
           </div>
         </div>
-        <input
+        <textarea
           id="token-input"
           v-model="settings.token"
-          placeholder="粘贴你的 Alltick Token"
+          rows="4"
+          placeholder="粘贴你的 Alltick Token（可多行，每行一个）"
           autocomplete="off"
           spellcheck="false"
         />
@@ -384,7 +385,8 @@ body {
   }
 
   input,
-  select {
+  select,
+  textarea {
     width: 100%;
     height: 36px;
     padding: 0 12px;
@@ -394,11 +396,20 @@ body {
     font-size: 14px;
     background: var(--panel-strong);
     box-shadow: inset 0 1px 2px rgba(18, 20, 25, 0.06);
+    resize: none;
 
     &:focus {
       outline: 2px solid rgba(14, 165, 233, 0.25);
       border-color: rgba(14, 165, 233, 0.7);
     }
+  }
+
+  textarea {
+    height: auto;
+    min-height: 96px;
+    padding: 10px 12px;
+    line-height: 1.5;
+    resize: none;
   }
 
   .help {

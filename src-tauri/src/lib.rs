@@ -16,6 +16,7 @@ use tauri::{
 use tauri_plugin_opener::OpenerExt;
 
 const ROTATE_MIN_SECONDS: u64 = 3;
+const ERROR_BACKOFF_MAX_SECONDS: u64 = 300;
 const SETTINGS_FILE: &str = "settings.json";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -108,6 +109,8 @@ struct ApiKline {
 #[derive(Deserialize)]
 struct BatchResp {
     ret: i64,
+    #[serde(default)]
+    msg: Option<String>,
     data: BatchData,
 }
 
@@ -205,7 +208,8 @@ fn save_settings(app: &AppHandle, settings: &QuoteSettings) -> Result<(), String
 }
 
 fn normalize_settings(mut settings: QuoteSettings) -> QuoteSettings {
-    settings.token = settings.token.trim().to_string();
+    let tokens = parse_tokens(&settings.token);
+    settings.token = tokens.join("\n");
 
     let mut seen = HashSet::new();
     let mut symbols = Vec::new();
@@ -250,17 +254,26 @@ fn normalize_settings(mut settings: QuoteSettings) -> QuoteSettings {
     settings
 }
 
+fn parse_tokens(token: &str) -> Vec<String> {
+    token
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .collect()
+}
+
 async fn fetch_batch_quotes(
     token: &str,
     codes: &[String],
     api_type: ApiType,
     use_system_proxy: bool,
-) -> Result<HashMap<String, (f64, u64, f64)>, String> {
+) -> Result<HashMap<String, (f64, u64, f64)>, FetchError> {
     let endpoint = match api_type {
         ApiType::Commodity => "https://quote.alltick.io/quote-b-api/batch-kline",
         ApiType::Stock => "https://quote.alltick.io/quote-stock-b-api/batch-kline",
     };
-    let mut url = reqwest::Url::parse(endpoint).map_err(|e| e.to_string())?;
+    let mut url = reqwest::Url::parse(endpoint).map_err(|e| FetchError::new(e.to_string()))?;
 
     url.query_pairs_mut().append_pair("token", token);
 
@@ -307,7 +320,7 @@ async fn fetch_batch_quotes(
                 "[xau-tray] request result: failed error={} elapsed_ms={}",
                 err, elapsed_ms
             ));
-            return Err(err);
+            return Err(FetchError::new(err));
         }
     };
     if payload.ret != 200 {
@@ -316,7 +329,10 @@ async fn fetch_batch_quotes(
             payload.ret,
             payload.data.kline_list.len()
         ));
-        return Err("bad payload".into());
+        return Err(FetchError::with_msg(
+            format!("api ret={}", payload.ret),
+            payload.msg.clone(),
+        ));
     }
 
     let mut map = HashMap::new();
@@ -332,6 +348,42 @@ async fn fetch_batch_quotes(
         }
     }
     Ok(map)
+}
+
+#[derive(Clone, Debug)]
+struct FetchError {
+    detail: String,
+    msg: Option<String>,
+}
+
+impl FetchError {
+    fn new(detail: String) -> Self {
+        Self { detail, msg: None }
+    }
+
+    fn with_msg(detail: String, msg: Option<String>) -> Self {
+        Self { detail, msg }
+    }
+
+    fn tooltip_lines(&self) -> Vec<String> {
+        let mut lines = vec![format!("错误: {}", self.detail)];
+        if let Some(msg) = self.msg.as_ref() {
+            let msg = msg.trim();
+            if !msg.is_empty() {
+                lines.push(format!("msg: {}", msg));
+            }
+        }
+        lines
+    }
+}
+
+fn error_title(base: &str) -> String {
+    let title = base.trim();
+    if title.is_empty() {
+        "🔴".to_string()
+    } else {
+        format!("🔴 {title}")
+    }
 }
 
 #[derive(Clone)]
@@ -627,14 +679,17 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
         let mut trends: HashMap<String, String> = HashMap::new();
         let mut rotate_index: usize = 0;
         let mut last_title = String::new();
+        let mut last_error: Option<FetchError> = None;
+        let mut error_backoff_seconds: u64 = 0;
+        let mut token_index: usize = 0;
         let mut next_refresh = Instant::now();
         let mut next_rotate = Instant::now();
 
         loop {
             let settings = settings_handle.lock().unwrap().clone();
             let now = Instant::now();
-            let refresh_interval = Duration::from_secs(settings.refresh_seconds);
             let rotate_interval = Duration::from_secs(settings.rotate_seconds);
+            let base_refresh_seconds = settings.refresh_seconds;
 
             if settings.symbols.is_empty() {
                 let _ = tray.set_title(Some("No symbols".to_string()));
@@ -657,61 +712,96 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                     now.format("%Y-%m-%d %H:%M:%S")
                 ));
                 let mut success = 0;
-                if settings.token.is_empty() {
+                let tokens = parse_tokens(&settings.token);
+                if tokens.is_empty() {
                     let _ = tray.set_title(Some("设置 Token".to_string()));
                     let _ = tray.set_tooltip(Some("请先在设置中填写 Alltick Token".to_string()));
                     if let Some(icon) = pending_icon.clone() {
                         let _ = tray.set_icon(Some(icon));
                     }
                 } else {
+                    if token_index >= tokens.len() {
+                        token_index = 0;
+                    }
                     let codes: Vec<String> =
                         settings.symbols.iter().map(|symbol| symbol.code.clone()).collect();
-                    match fetch_batch_quotes(
-                        &settings.token,
-                        &codes,
-                        settings.api_type,
-                        settings.use_system_proxy,
-                    )
-                    .await
-                    {
-                        Ok(map) => {
-                            for symbol in &settings.symbols {
-                                if let Some((price, _ts, open)) = map.get(&symbol.code) {
-                                    let trend = if price > open {
-                                        "▲"
-                                    } else if price < open {
-                                        "▼"
-                                    } else {
-                                        "—"
-                                    };
-                                    last_prices.insert(symbol.code.clone(), *price);
-                                    trends.insert(symbol.code.clone(), trend.to_string());
-                                    success += 1;
-                                } else {
-                                    trends.insert(symbol.code.clone(), "—".to_string());
-                                }
+                    let mut attempt = 0;
+                    let mut cursor = token_index;
+                    let mut last_attempt_error: Option<FetchError> = None;
+                    let mut map: Option<HashMap<String, (f64, u64, f64)>> = None;
+
+                    while attempt < tokens.len() {
+                        match fetch_batch_quotes(
+                            &tokens[cursor],
+                            &codes,
+                            settings.api_type,
+                            settings.use_system_proxy,
+                        )
+                        .await
+                        {
+                            Ok(payload) => {
+                                map = Some(payload);
+                                token_index = cursor;
+                                break;
                             }
-                        }
-                        Err(_) => {
-                            for symbol in &settings.symbols {
-                                trends.insert(symbol.code.clone(), "—".to_string());
+                            Err(err) => {
+                                last_attempt_error = Some(err);
+                                cursor = (cursor + 1) % tokens.len();
+                                attempt += 1;
                             }
                         }
                     }
 
-                    let tooltip_lines: Vec<String> = settings
-                        .symbols
-                        .iter()
-                        .map(|symbol| {
-                            let trend = trends.get(&symbol.code).map(|s| s.as_str());
-                            let price = last_prices.get(&symbol.code).copied();
-                            format_price_line(symbol, price, trend)
-                        })
-                        .collect();
+                    if let Some(map) = map {
+                        last_error = None;
+                        error_backoff_seconds = 0;
+                        for symbol in &settings.symbols {
+                            if let Some((price, _ts, open)) = map.get(&symbol.code) {
+                                let trend = if price > open {
+                                    "▲"
+                                } else if price < open {
+                                    "▼"
+                                } else {
+                                    "—"
+                                };
+                                last_prices.insert(symbol.code.clone(), *price);
+                                trends.insert(symbol.code.clone(), trend.to_string());
+                                success += 1;
+                            } else {
+                                trends.insert(symbol.code.clone(), "—".to_string());
+                            }
+                        }
+                    } else {
+                        last_error = last_attempt_error;
+                        token_index = 0;
+                        error_backoff_seconds = if error_backoff_seconds == 0 {
+                            (base_refresh_seconds * 3).max(base_refresh_seconds)
+                        } else {
+                            (error_backoff_seconds * 2).min(ERROR_BACKOFF_MAX_SECONDS)
+                        };
+                        if error_backoff_seconds < base_refresh_seconds {
+                            error_backoff_seconds = base_refresh_seconds;
+                        }
+                        for symbol in &settings.symbols {
+                            trends.insert(symbol.code.clone(), "—".to_string());
+                        }
+                    }
+
+                    let mut tooltip_lines: Vec<String> = Vec::new();
+                    if let Some(err) = last_error.as_ref() {
+                        tooltip_lines.extend(err.tooltip_lines());
+                    }
+                    tooltip_lines.extend(settings.symbols.iter().map(|symbol| {
+                        let trend = trends.get(&symbol.code).map(|s| s.as_str());
+                        let price = last_prices.get(&symbol.code).copied();
+                        format_price_line(symbol, price, trend)
+                    }));
                     let _ = tray.set_tooltip(Some(tooltip_lines.join("\n")));
 
                     if success == 0 {
-                        if !last_title.is_empty() && !last_title.ends_with('*') {
+                        if let Some(err) = last_error.as_ref() {
+                            let _ = tray.set_title(Some(error_title(&last_title)));
+                        } else if !last_title.is_empty() && !last_title.ends_with('*') {
                             last_title.push('*');
                             let _ = tray.set_title(Some(last_title.clone()));
                         }
@@ -722,7 +812,12 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                         let trend = trends.get(&symbol.code).map(|s| s.as_str());
                         let price = last_prices.get(&symbol.code).copied();
                         last_title = format_title(symbol, price, trend);
-                        let _ = tray.set_title(Some(last_title.clone()));
+                        let title = if last_error.is_some() {
+                            error_title(&last_title)
+                        } else {
+                            last_title.clone()
+                        };
+                        let _ = tray.set_title(Some(title));
                         let icon = match trend {
                             Some("▲") => up_icon.clone(),
                             Some("▼") => down_icon.clone(),
@@ -733,7 +828,12 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                         }
                     }
                 }
-                next_refresh = Instant::now() + refresh_interval;
+                let refresh_seconds = if error_backoff_seconds > 0 {
+                    error_backoff_seconds.min(ERROR_BACKOFF_MAX_SECONDS)
+                } else {
+                    base_refresh_seconds
+                };
+                next_refresh = Instant::now() + Duration::from_secs(refresh_seconds);
             }
 
             if settings.display_mode == DisplayMode::Rotate && now >= next_rotate {
@@ -743,7 +843,12 @@ fn start_polling(tray: tauri::tray::TrayIcon, settings_handle: Arc<Mutex<QuoteSe
                     let trend = trends.get(&symbol.code).map(|s| s.as_str());
                     let price = last_prices.get(&symbol.code).copied();
                     last_title = format_title(symbol, price, trend);
-                    let _ = tray.set_title(Some(last_title.clone()));
+                    let title = if last_error.is_some() {
+                        error_title(&last_title)
+                    } else {
+                        last_title.clone()
+                    };
+                    let _ = tray.set_title(Some(title));
                     let icon = match trend {
                         Some("▲") => up_icon.clone(),
                         Some("▼") => down_icon.clone(),
