@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -10,35 +10,143 @@ type SymbolItem = {
   label: string;
 };
 
+type ProviderConfig = {
+  id: string;
+  enabled: boolean;
+  priority: number;
+  api_key: string;
+};
+
+type ProviderMeta = {
+  id: string;
+  name: string;
+  link: string;
+  defaultEnabled: boolean;
+  defaultPriority: number;
+  placeholder?: string;
+};
+
 type QuoteSettings = {
-  token: string;
   symbols: SymbolItem[];
   display_mode: DisplayMode;
-  api_type: "commodity" | "stock";
-  refresh_seconds: number;
   rotate_seconds: number;
   fixed_symbol: string | null;
   use_system_proxy: boolean;
+  metals_refresh_seconds: number;
+  crypto_refresh_seconds: number;
+  stock_refresh_seconds: number;
+  metals_providers: ProviderConfig[];
+  crypto_providers: ProviderConfig[];
+  stock_providers: ProviderConfig[];
 };
+
+const METAL_PROVIDERS: ProviderMeta[] = [
+  {
+    id: "tiingo",
+    name: "Tiingo FX",
+    link: "https://api.tiingo.com/",
+    defaultEnabled: true,
+    defaultPriority: 1,
+    placeholder: "Tiingo API key",
+  },
+  {
+    id: "twelvedata",
+    name: "Twelve Data",
+    link: "https://twelvedata.com/docs",
+    defaultEnabled: true,
+    defaultPriority: 2,
+    placeholder: "Twelve Data API key",
+  },
+  {
+    id: "finnhub",
+    name: "Finnhub",
+    link: "https://finnhub.io/docs/api/forex-candles",
+    defaultEnabled: false,
+    defaultPriority: 3,
+    placeholder: "Finnhub API key",
+  },
+  {
+    id: "polygon",
+    name: "Polygon.io",
+    link: "https://polygon.io/docs/forex",
+    defaultEnabled: false,
+    defaultPriority: 4,
+    placeholder: "Polygon API key",
+  },
+];
+
+const CRYPTO_PROVIDERS: ProviderMeta[] = [
+  {
+    id: "binance",
+    name: "Binance",
+    link: "https://binance-docs.github.io/apidocs/spot/en/#kline-candlestick-data",
+    defaultEnabled: true,
+    defaultPriority: 1,
+    placeholder: "无需 key（可留空）",
+  },
+  {
+    id: "okx",
+    name: "OKX",
+    link: "https://www.okx.com/docs-v5/en/#rest-api-market-data-get-candlesticks",
+    defaultEnabled: true,
+    defaultPriority: 2,
+    placeholder: "无需 key（可留空）",
+  },
+];
+
+const STOCK_PROVIDERS: ProviderMeta[] = [
+  {
+    id: "twelvedata",
+    name: "Twelve Data",
+    link: "https://twelvedata.com/docs",
+    defaultEnabled: true,
+    defaultPriority: 1,
+    placeholder: "Twelve Data API key",
+  },
+];
 
 const win = getCurrentWindow();
 let unlistenClose: (() => void) | null = null;
 const saving = ref(false);
 const status = ref("");
 const settings = ref<QuoteSettings>({
-  token: "",
   symbols: [
     { code: "XAUUSD", label: "黄金" },
-    { code: "Silver", label: "白银" },
+    { code: "XAGUSD", label: "白银" },
     { code: "BTCUSDT", label: "比特币" },
   ],
   display_mode: "rotate",
-  api_type: "commodity",
-  refresh_seconds: 10,
   rotate_seconds: 10,
   fixed_symbol: null,
   use_system_proxy: false,
+  metals_refresh_seconds: 60,
+  crypto_refresh_seconds: 10,
+  stock_refresh_seconds: 900,
+  metals_providers: METAL_PROVIDERS.map((item) => ({
+    id: item.id,
+    enabled: item.defaultEnabled,
+    priority: item.defaultPriority,
+    api_key: "",
+  })),
+  crypto_providers: CRYPTO_PROVIDERS.map((item) => ({
+    id: item.id,
+    enabled: item.defaultEnabled,
+    priority: item.defaultPriority,
+    api_key: "",
+  })),
+  stock_providers: STOCK_PROVIDERS.map((item) => ({
+    id: item.id,
+    enabled: item.defaultEnabled,
+    priority: item.defaultPriority,
+    api_key: "",
+  })),
 });
+
+const providerLabelMap = {
+  metals: Object.fromEntries(METAL_PROVIDERS.map((item) => [item.id, item])),
+  crypto: Object.fromEntries(CRYPTO_PROVIDERS.map((item) => [item.id, item])),
+  stocks: Object.fromEntries(STOCK_PROVIDERS.map((item) => [item.id, item])),
+};
 
 const symbolOptions = computed(() =>
   settings.value.symbols
@@ -49,10 +157,42 @@ const symbolOptions = computed(() =>
     .filter((item) => item.value),
 );
 
+function normalizeProviders(list: ProviderConfig[], catalog: ProviderMeta[]) {
+  const map = new Map<string, ProviderConfig>();
+  for (const item of list ?? []) {
+    if (!item?.id) continue;
+    map.set(item.id, {
+      id: item.id,
+      enabled: !!item.enabled,
+      priority: item.priority || 50,
+      api_key: item.api_key ?? "",
+    });
+  }
+  for (const meta of catalog) {
+    if (!map.has(meta.id)) {
+      map.set(meta.id, {
+        id: meta.id,
+        enabled: meta.defaultEnabled,
+        priority: meta.defaultPriority,
+        api_key: "",
+      });
+    }
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => a.priority - b.priority || a.id.localeCompare(b.id),
+  );
+}
+
 async function loadSettings() {
   const loaded = await invoke<QuoteSettings>("get_settings");
   if (loaded) {
-    settings.value = loaded;
+    settings.value = {
+      ...settings.value,
+      ...loaded,
+      metals_providers: normalizeProviders(loaded.metals_providers, METAL_PROVIDERS),
+      crypto_providers: normalizeProviders(loaded.crypto_providers, CRYPTO_PROVIDERS),
+      stock_providers: normalizeProviders(loaded.stock_providers, STOCK_PROVIDERS),
+    };
     status.value = "";
   }
 }
@@ -94,47 +234,19 @@ function setDisplayMode(mode: DisplayMode) {
   }
 }
 
-function applyStockDefaults() {
-  settings.value.symbols = [
-    { code: "000001.SH", label: "上证指数" },
-    { code: "HSI.HK", label: "恒生指数" },
-    { code: ".IXIC.US", label: "纳斯达克指数" },
-  ];
-  if (settings.value.display_mode === "fixed") {
-    settings.value.fixed_symbol = settings.value.symbols[0]?.code ?? null;
-  }
-}
-
-function applyCommodityDefaults() {
-  settings.value.symbols = [
-    { code: "XAUUSD", label: "黄金" },
-    { code: "Silver", label: "白银" },
-    { code: "BTCUSDT", label: "比特币" },
-  ];
-  if (settings.value.display_mode === "fixed") {
-    settings.value.fixed_symbol = settings.value.symbols[0]?.code ?? null;
-  }
-}
-
-watch(
-  () => settings.value.api_type,
-  (next, prev) => {
-    if (next === prev) return;
-    if (next === "stock") {
-      applyStockDefaults();
-    } else {
-      applyCommodityDefaults();
-    }
-  },
-);
-
 async function save() {
   saving.value = true;
   try {
     const updated = await invoke<QuoteSettings>("save_settings_command", {
       settings: settings.value,
     });
-    settings.value = updated;
+    settings.value = {
+      ...settings.value,
+      ...updated,
+      metals_providers: normalizeProviders(updated.metals_providers, METAL_PROVIDERS),
+      crypto_providers: normalizeProviders(updated.crypto_providers, CRYPTO_PROVIDERS),
+      stock_providers: normalizeProviders(updated.stock_providers, STOCK_PROVIDERS),
+    };
     status.value = "设置已保存";
   } finally {
     saving.value = false;
@@ -153,60 +265,217 @@ async function closeWindow() {
       <article class="card">
         <div class="card-head">
           <div>
-            <h2>AllTick API Token</h2>
+            <h2>品类与自动识别</h2>
           </div>
+          <button class="mini" type="button" @click="addSymbol">+ 添加</button>
         </div>
-        <textarea
-          id="token-input"
-          v-model="settings.token"
-          rows="4"
-          placeholder="粘贴你的 Alltick Token（可多行，每行一个）"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <div class="help">
-          <a href="https://apis.alltick.co/integration-process/token-application" target="_blank"
-            >获取 Token</a
-          >
+        <p class="hint">
+          自动识别规则：XAUUSD/XAGUSD → 贵金属；BTCUSDT/ETHUSDT → 加密；其它默认归入股票。
+        </p>
+        <div class="preset">
+          <span>常用：</span>
+          <button type="button" @click="addPreset('XAUUSD', '黄金')">黄金</button>
+          <button type="button" @click="addPreset('XAGUSD', '白银')">白银</button>
+          <button type="button" @click="addPreset('BTCUSDT', '比特币')">比特币</button>
+          <button type="button" @click="addPreset('ETHUSDT', '以太坊')">以太坊</button>
+          <button type="button" @click="addPreset('000001.SH', '上证指数')">上证指数</button>
+          <button type="button" @click="addPreset('HSI.HK', '恒生指数')">恒生指数</button>
+          <button type="button" @click="addPreset('.IXIC.US', '纳斯达克指数')">
+            纳斯达克指数
+          </button>
         </div>
-        <div class="field-group">
-          <label class="checkbox">
-            <input type="checkbox" v-model="settings.use_system_proxy" />
-            <span>使用系统代理</span>
-          </label>
+
+        <div class="symbols">
+          <div v-for="(symbol, index) in settings.symbols" :key="index" class="symbol-row">
+            <input v-model="symbol.label" placeholder="名称" />
+            <input v-model="symbol.code" placeholder="编码，如 XAUUSD/BTCUSDT/AAPL" />
+            <button class="link" type="button" @click="removeSymbol(index)">移除</button>
+          </div>
         </div>
       </article>
 
       <article class="card">
         <div class="card-head">
           <div>
-            <h2>行情品类</h2>
+            <h2>刷新频率</h2>
           </div>
-          <button class="mini" type="button" @click="addSymbol">+ 添加</button>
         </div>
-        <label class="label" for="api-type">AllTick 实时行情接口类型</label>
-        <select id="api-type" v-model="settings.api_type">
-          <option value="commodity">商品（贵金属/加密/原油等）</option>
-          <option value="stock">股票（美股/港股/A股）</option>
-        </select>
-        <div class="preset">
-          <div class="help" style="margin: 0">
-            <a href="https://apis.alltick.co/integration-process/product-code-list" target="_blank"
-              >产品列表</a
-            >
-          </div>
-          <span>常用：</span>
-          <button type="button" @click="addPreset('XAUUSD', '黄金')">黄金</button>
-          <button type="button" @click="addPreset('Silver', '白银')">白银</button>
-          <button type="button" @click="addPreset('BTCUSDT', '比特币')">比特币</button>
+        <div class="field-group">
+          <label class="label" for="metals-refresh">贵金属刷新间隔（秒）</label>
+          <input
+            id="metals-refresh"
+            type="number"
+            min="30"
+            max="3600"
+            v-model.number="settings.metals_refresh_seconds"
+          />
+          <span class="inline-note">建议 60 秒</span>
         </div>
+        <div class="field-group">
+          <label class="label" for="crypto-refresh">加密刷新间隔（秒）</label>
+          <input
+            id="crypto-refresh"
+            type="number"
+            min="5"
+            max="3600"
+            v-model.number="settings.crypto_refresh_seconds"
+          />
+          <span class="inline-note">建议 10 秒</span>
+        </div>
+        <div class="field-group">
+          <label class="label" for="stock-refresh">股票刷新间隔（秒）</label>
+          <input
+            id="stock-refresh"
+            type="number"
+            min="300"
+            max="86400"
+            v-model.number="settings.stock_refresh_seconds"
+          />
+          <span class="inline-note">建议 900 秒（15 分钟）</span>
+        </div>
+      </article>
 
-        <div class="symbols">
-          <div v-for="(symbol, index) in settings.symbols" :key="index" class="symbol-row">
-            <input v-model="symbol.label" placeholder="名称" />
-            <input v-model="symbol.code" placeholder="编码，如 XAUUSD" />
-            <button class="link" type="button" @click="removeSymbol(index)">移除</button>
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2>贵金属数据源</h2>
           </div>
+        </div>
+        <p class="hint">XAUUSD / XAGUSD 会自动映射为各家接口的格式。</p>
+        <div class="providers">
+          <div v-for="provider in settings.metals_providers" :key="provider.id" class="provider">
+            <div class="provider-head">
+              <div>
+                <strong>{{ providerLabelMap.metals[provider.id]?.name || provider.id }}</strong>
+                <span class="provider-id">{{ provider.id }}</span>
+              </div>
+              <a
+                v-if="providerLabelMap.metals[provider.id]?.link"
+                :href="providerLabelMap.metals[provider.id].link"
+                target="_blank"
+              >
+                文档
+              </a>
+            </div>
+            <div class="provider-fields">
+              <label class="checkbox tiny">
+                <input type="checkbox" v-model="provider.enabled" />
+                <span>启用</span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="99"
+                v-model.number="provider.priority"
+                placeholder="优先级"
+              />
+              <input
+                type="text"
+                v-model="provider.api_key"
+                :placeholder="providerLabelMap.metals[provider.id]?.placeholder || 'API key'"
+              />
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2>加密数据源</h2>
+          </div>
+        </div>
+        <div class="providers">
+          <div v-for="provider in settings.crypto_providers" :key="provider.id" class="provider">
+            <div class="provider-head">
+              <div>
+                <strong>{{ providerLabelMap.crypto[provider.id]?.name || provider.id }}</strong>
+                <span class="provider-id">{{ provider.id }}</span>
+              </div>
+              <a
+                v-if="providerLabelMap.crypto[provider.id]?.link"
+                :href="providerLabelMap.crypto[provider.id].link"
+                target="_blank"
+              >
+                文档
+              </a>
+            </div>
+            <div class="provider-fields">
+              <label class="checkbox tiny">
+                <input type="checkbox" v-model="provider.enabled" />
+                <span>启用</span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="99"
+                v-model.number="provider.priority"
+                placeholder="优先级"
+              />
+              <input
+                type="text"
+                v-model="provider.api_key"
+                :placeholder="providerLabelMap.crypto[provider.id]?.placeholder || 'API key'"
+              />
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2>股票数据源</h2>
+          </div>
+        </div>
+        <div class="providers">
+          <div v-for="provider in settings.stock_providers" :key="provider.id" class="provider">
+            <div class="provider-head">
+              <div>
+                <strong>{{ providerLabelMap.stocks[provider.id]?.name || provider.id }}</strong>
+                <span class="provider-id">{{ provider.id }}</span>
+              </div>
+              <a
+                v-if="providerLabelMap.stocks[provider.id]?.link"
+                :href="providerLabelMap.stocks[provider.id].link"
+                target="_blank"
+              >
+                文档
+              </a>
+            </div>
+            <div class="provider-fields">
+              <label class="checkbox tiny">
+                <input type="checkbox" v-model="provider.enabled" />
+                <span>启用</span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="99"
+                v-model.number="provider.priority"
+                placeholder="优先级"
+              />
+              <input
+                type="text"
+                v-model="provider.api_key"
+                :placeholder="providerLabelMap.stocks[provider.id]?.placeholder || 'API key'"
+              />
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2>网络</h2>
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="checkbox">
+            <input type="checkbox" v-model="settings.use_system_proxy" />
+            <span>使用系统代理</span>
+          </label>
         </div>
       </article>
 
@@ -231,16 +500,6 @@ async function closeWindow() {
           >
             固定
           </button>
-        </div>
-        <div class="field-group">
-          <label class="label" for="refresh-seconds">行情刷新间隔（秒）</label>
-          <input
-            id="refresh-seconds"
-            type="number"
-            min="10"
-            v-model.number="settings.refresh_seconds"
-          />
-          <span class="inline-note">免费模式最快 10 秒刷新</span>
         </div>
         <div v-if="settings.display_mode === 'rotate'" class="field-group">
           <label class="label" for="rotate-seconds">轮播切换间隔（秒）</label>
@@ -456,6 +715,50 @@ body {
     }
   }
 
+  .providers {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-top: 12px;
+  }
+
+  .provider {
+    border-radius: 14px;
+    padding: 12px;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    background: rgba(255, 255, 255, 0.6);
+
+    .provider-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      font-size: 12px;
+
+      strong {
+        font-size: 14px;
+      }
+
+      a {
+        color: #0f766e;
+        font-size: 12px;
+      }
+    }
+
+    .provider-id {
+      margin-left: 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .provider-fields {
+      display: grid;
+      grid-template-columns: auto 96px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+  }
+
   .segmented {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -501,6 +804,12 @@ body {
       height: 18px;
       accent-color: var(--accent);
     }
+  }
+
+  .checkbox.tiny {
+    padding: 6px 8px;
+    font-size: 12px;
+    background: rgba(14, 165, 233, 0.06);
   }
 
   .hint {
@@ -575,6 +884,24 @@ body {
     cursor: pointer;
     text-underline-offset: 3px;
     font-size: 12px;
+  }
+
+  @media (max-width: 720px) {
+    .provider {
+      .provider-head {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+
+      .provider-id {
+        margin-left: 0;
+      }
+
+      .provider-fields {
+        grid-template-columns: 1fr;
+      }
+    }
   }
 }
 </style>
