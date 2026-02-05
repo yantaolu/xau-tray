@@ -55,15 +55,9 @@ pub async fn fetch_binance_quotes(
             .ok_or_else(|| {
                 FetchError::new(&provider.id, FetchFailureKind::Other, "missing close".to_string())
             })?;
-        let ts = arr
-            .get(0)
-            .and_then(|v| v.as_i64())
-            .map(|v| (v / 1000) as u64)
-            .unwrap_or(0);
         result.push(QuoteData {
             code: code.to_string(),
             price: close,
-            timestamp: ts,
             open,
         });
     }
@@ -113,12 +107,6 @@ pub async fn fetch_okx_quotes(
             .ok_or_else(|| {
                 FetchError::new(&provider.id, FetchFailureKind::Other, "missing data".to_string())
             })?;
-        let ts = arr
-            .get(0)
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<i64>().ok())
-            .map(|v| (v / 1000) as u64)
-            .unwrap_or(0);
         let open = arr
             .get(1)
             .and_then(|v| v.as_str())
@@ -136,7 +124,6 @@ pub async fn fetch_okx_quotes(
         result.push(QuoteData {
             code: code.to_string(),
             price: close,
-            timestamp: ts,
             open,
         });
     }

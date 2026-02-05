@@ -32,26 +32,52 @@ fn error_title(base: &str) -> String {
     }
 }
 
-fn format_price_line(symbol: &SymbolItem, price: Option<f64>, trend: Option<&str>) -> String {
+fn format_price_line(
+    symbol: &SymbolItem,
+    price: Option<f64>,
+    trend: Option<&str>,
+    change_pct: Option<&str>,
+) -> String {
     let name = if symbol.label.is_empty() {
         symbol.code.as_str()
     } else {
         symbol.label.as_str()
     };
+    let code = symbol.code.trim().to_uppercase();
+    if is_a_share_code(&code) {
+        return match (price, change_pct) {
+            (Some(price), Some(change)) => format!("{name}({change}) {price:.2}"),
+            (Some(price), None) => format!("{name}(--) {price:.2}"),
+            _ => format!("{name} --"),
+        };
+    }
     match (trend, price) {
         (Some(trend), Some(price)) => format!("{trend} {name} {price:.2}"),
         _ => format!("{name} --"),
     }
 }
 
-fn format_title(symbol: &SymbolItem, price: Option<f64>, trend: Option<&str>) -> String {
+fn format_title(
+    symbol: &SymbolItem,
+    price: Option<f64>,
+    _trend: Option<&str>,
+    change_pct: Option<&str>,
+) -> String {
     let name = if symbol.label.is_empty() {
         symbol.code.as_str()
     } else {
         symbol.label.as_str()
     };
-    match (trend, price) {
-        (_, Some(price)) => format!("{name} {price:.2}"),
+    let code = symbol.code.trim().to_uppercase();
+    if is_a_share_code(&code) {
+        return match (price, change_pct) {
+            (Some(price), Some(change)) => format!("{name}({change}) {price:.2}"),
+            (Some(price), None) => format!("{name}(--) {price:.2}"),
+            _ => format!("{name} --"),
+        };
+    }
+    match price {
+        Some(price) => format!("{name} {price:.2}"),
         _ => format!("{name} --"),
     }
 }
@@ -75,29 +101,40 @@ fn pick_display_symbol<'a>(
     }
 }
 
-fn classify_asset(code: &str) -> AssetKind {
+fn classify_asset(code: &str) -> Option<AssetKind> {
     let trimmed = code.trim().to_uppercase();
-    if trimmed == "XAUUSD" || trimmed == "XAGUSD" {
-        return AssetKind::Metals;
+    if matches!(
+        trimmed.as_str(),
+        "XAUUSD" | "XAGUSD" | "XPTUSD" | "XPDUSD" | "XCUUSD"
+    ) {
+        return Some(AssetKind::Metals);
     }
     if trimmed.ends_with("USDT") || trimmed.ends_with("USDC") || trimmed.ends_with("BUSD") {
-        return AssetKind::Crypto;
+        return Some(AssetKind::Crypto);
     }
-    if trimmed.starts_with('.')
-        || trimmed.ends_with(".HK")
-        || trimmed.ends_with(".SH")
-        || trimmed.ends_with(".SZ")
-        || trimmed.ends_with(".US")
-    {
-        return AssetKind::Stocks;
+    if is_a_share_code(&trimmed) {
+        return Some(AssetKind::Stocks);
     }
-    AssetKind::Stocks
+    None
+}
+
+fn is_a_share_code(code: &str) -> bool {
+    if let Some((_, suffix)) = code.rsplit_once('.') {
+        return suffix == "SH" || suffix == "SZ";
+    }
+    if code.starts_with("SH") || code.starts_with("SZ") {
+        return code.len() > 2;
+    }
+    match code.chars().next() {
+        Some('6') | Some('0') | Some('3') => true,
+        _ => false,
+    }
 }
 
 fn provider_requires_key(kind: AssetKind, provider_id: &str) -> bool {
     match kind {
         AssetKind::Metals => true,
-        AssetKind::Stocks => true,
+        AssetKind::Stocks => false,
         AssetKind::Crypto => !matches!(provider_id, "binance" | "okx"),
     }
 }
@@ -111,6 +148,8 @@ async fn refresh_asset_quotes(
     last_errors: &mut HashMap<AssetKind, FetchError>,
     last_prices: &mut HashMap<String, f64>,
     trends: &mut HashMap<String, String>,
+    last_changes: &mut HashMap<String, String>,
+    provider_cursor: Option<&mut usize>,
 ) -> bool {
     if codes.is_empty() {
         return false;
@@ -147,9 +186,23 @@ async fn refresh_asset_quotes(
     candidates.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.id.cmp(&b.id)));
 
     let mut attempt = 0;
+    let max_attempts = if kind == AssetKind::Metals {
+        candidates.len()
+    } else {
+        2
+    };
     let mut last_error: Option<FetchError> = None;
-    for provider in candidates {
-        if attempt >= 2 {
+    let mut order: Vec<usize> = (0..candidates.len()).collect();
+    if kind == AssetKind::Metals {
+        if let Some(cursor) = provider_cursor.as_deref().copied() {
+            let start = cursor % candidates.len();
+            order.rotate_left(start);
+        }
+    }
+    let mut last_attempted_index: Option<usize> = None;
+    for index in order {
+        let provider = candidates[index];
+        if attempt >= max_attempts {
             break;
         }
         let entry = runtime
@@ -166,6 +219,7 @@ async fn refresh_asset_quotes(
             AssetKind::Crypto => fetch_crypto_quotes(provider, codes, proxy_setting).await,
             AssetKind::Stocks => fetch_stock_quotes(provider, codes, proxy_setting).await,
         };
+        last_attempted_index = Some(index);
         match result {
             Ok(quotes) => {
                 if quotes.is_empty() {
@@ -189,11 +243,29 @@ async fn refresh_asset_quotes(
                     };
                     last_prices.insert(quote.code.clone(), quote.price);
                     trends.insert(quote.code.clone(), trend.to_string());
+                    if kind == AssetKind::Stocks {
+                        let change = if quote.open.abs() < f64::EPSILON {
+                            None
+                        } else {
+                            Some((quote.price - quote.open) / quote.open * 100.0)
+                        };
+                        if let Some(change) = change {
+                            last_changes.insert(quote.code.clone(), format!("{change:+.2}%"));
+                        } else {
+                            last_changes.remove(&quote.code);
+                        }
+                    }
                     seen.insert(quote.code);
                 }
                 for code in codes {
                     if !seen.contains(code) {
                         trends.insert(code.clone(), "—".to_string());
+                        last_changes.remove(code);
+                    }
+                }
+                if kind == AssetKind::Metals {
+                    if let Some(cursor) = provider_cursor {
+                        *cursor = (index + 1) % candidates.len();
                     }
                 }
                 return true;
@@ -206,6 +278,11 @@ async fn refresh_asset_quotes(
         }
     }
 
+    if kind == AssetKind::Metals {
+        if let (Some(cursor), Some(index)) = (provider_cursor, last_attempted_index) {
+            *cursor = (index + 1) % candidates.len();
+        }
+    }
     if let Some(err) = last_error {
         last_errors.insert(kind, err);
     }
@@ -230,8 +307,9 @@ pub fn start_polling(
 
         let mut last_prices: HashMap<String, f64> = HashMap::new();
         let mut trends: HashMap<String, String> = HashMap::new();
+        let mut last_changes: HashMap<String, String> = HashMap::new();
         let mut rotate_index: usize = 0;
-        let mut last_title: Option<String> = None;
+        let mut metals_provider_cursor: usize = 0;
         let mut last_errors: HashMap<AssetKind, FetchError> = HashMap::new();
         let mut metals_runtime: HashMap<String, ProviderRuntime> = HashMap::new();
         let mut crypto_runtime: HashMap<String, ProviderRuntime> = HashMap::new();
@@ -276,12 +354,24 @@ pub fn start_polling(
             let mut metals_codes: Vec<String> = Vec::new();
             let mut crypto_codes: Vec<String> = Vec::new();
             let mut stock_codes: Vec<String> = Vec::new();
+            let mut invalid_symbols: Vec<String> = Vec::new();
             for symbol in &settings.symbols {
                 match classify_asset(&symbol.code) {
-                    AssetKind::Metals => metals_codes.push(symbol.code.clone()),
-                    AssetKind::Crypto => crypto_codes.push(symbol.code.clone()),
-                    AssetKind::Stocks => stock_codes.push(symbol.code.clone()),
+                    Some(AssetKind::Metals) => metals_codes.push(symbol.code.clone()),
+                    Some(AssetKind::Crypto) => crypto_codes.push(symbol.code.clone()),
+                    Some(AssetKind::Stocks) => stock_codes.push(symbol.code.clone()),
+                    None => invalid_symbols.push(symbol.code.clone()),
                 }
+            }
+            if metals_codes.is_empty() && crypto_codes.is_empty() && stock_codes.is_empty() {
+                let detail = format!("无效编码: {}", invalid_symbols.join(", "));
+                let _ = tray.set_title(Some(detail.clone()));
+                let _ = tray.set_tooltip(Some(detail));
+                if let Some(icon) = pending_icon.clone() {
+                    let _ = tray.set_icon(Some(icon));
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
             }
 
             let should_refresh_metals = now >= next_metals_refresh && !metals_codes.is_empty();
@@ -311,6 +401,8 @@ pub fn start_polling(
                         &mut last_errors,
                         &mut last_prices,
                         &mut trends,
+                        &mut last_changes,
+                        Some(&mut metals_provider_cursor),
                     )
                     .await;
                     next_metals_refresh =
@@ -327,6 +419,8 @@ pub fn start_polling(
                         &mut last_errors,
                         &mut last_prices,
                         &mut trends,
+                        &mut last_changes,
+                        None,
                     )
                     .await;
                     next_crypto_refresh =
@@ -343,6 +437,8 @@ pub fn start_polling(
                         &mut last_errors,
                         &mut last_prices,
                         &mut trends,
+                        &mut last_changes,
+                        None,
                     )
                     .await;
                     next_stock_refresh =
@@ -358,19 +454,26 @@ pub fn start_polling(
                 tooltip_lines.extend(settings.symbols.iter().map(|symbol| {
                     let trend = trends.get(&symbol.code).map(|s| s.as_str());
                     let price = last_prices.get(&symbol.code).copied();
-                    format_price_line(symbol, price, trend)
+                    let change = last_changes.get(&symbol.code).map(|s| s.as_str());
+                    format_price_line(symbol, price, trend, change)
                 }));
+                if !invalid_symbols.is_empty() {
+                    tooltip_lines.push(format!(
+                        "无效编码: {}",
+                        invalid_symbols.join(", ")
+                    ));
+                }
                 let _ = tray.set_tooltip(Some(tooltip_lines.join("\n")));
 
                 if let Some(symbol) = pick_display_symbol(&settings, rotate_index) {
                     let trend = trends.get(&symbol.code).map(|s| s.as_str());
                     let price = last_prices.get(&symbol.code).copied();
-                    let new_title = format_title(symbol, price, trend);
-                    last_title = Some(new_title.clone());
+                    let change = last_changes.get(&symbol.code).map(|s| s.as_str());
+                    let new_title = format_title(symbol, price, trend, change);
                     let title = if last_errors.is_empty() {
                         new_title
                     } else {
-                        error_title(last_title.as_deref().unwrap_or(""))
+                        error_title(&new_title)
                     };
                     let _ = tray.set_title(Some(title));
                     let icon = match trend {
@@ -390,12 +493,12 @@ pub fn start_polling(
                 if let Some(symbol) = pick_display_symbol(&settings, rotate_index) {
                     let trend = trends.get(&symbol.code).map(|s| s.as_str());
                     let price = last_prices.get(&symbol.code).copied();
-                    let new_title = format_title(symbol, price, trend);
-                    last_title = Some(new_title.clone());
+                    let change = last_changes.get(&symbol.code).map(|s| s.as_str());
+                    let new_title = format_title(symbol, price, trend, change);
                     let title = if last_errors.is_empty() {
                         new_title
                     } else {
-                        error_title(last_title.as_deref().unwrap_or(""))
+                        error_title(&new_title)
                     };
                     let _ = tray.set_title(Some(title));
                     let icon = match trend {

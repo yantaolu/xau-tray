@@ -171,7 +171,7 @@ pub async fn send_get_request(
     headers: &[(&str, String)],
 ) -> Result<(StatusCode, String), String> {
     let client = build_http_client(proxy_setting)?;
-    let mut request = client.get(url);
+    let mut request = client.get(url.clone());
     for (key, value) in headers {
         request = request.header(*key, value);
     }

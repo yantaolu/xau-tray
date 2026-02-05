@@ -57,22 +57,6 @@ const METAL_PROVIDERS: ProviderMeta[] = [
     defaultPriority: 2,
     placeholder: "Twelve Data API key",
   },
-  {
-    id: "finnhub",
-    name: "Finnhub",
-    link: "https://finnhub.io/docs/api/forex-candles",
-    defaultEnabled: false,
-    defaultPriority: 3,
-    placeholder: "Finnhub API key",
-  },
-  {
-    id: "polygon",
-    name: "Polygon.io",
-    link: "https://polygon.io/docs/forex",
-    defaultEnabled: false,
-    defaultPriority: 4,
-    placeholder: "Polygon API key",
-  },
 ];
 
 const CRYPTO_PROVIDERS: ProviderMeta[] = [
@@ -96,12 +80,12 @@ const CRYPTO_PROVIDERS: ProviderMeta[] = [
 
 const STOCK_PROVIDERS: ProviderMeta[] = [
   {
-    id: "twelvedata",
-    name: "Twelve Data",
-    link: "https://twelvedata.com/docs",
+    id: "eastmoney",
+    name: "东方财富",
+    link: "https://push2.eastmoney.com/api/qt/stock/get",
     defaultEnabled: true,
     defaultPriority: 1,
-    placeholder: "Twelve Data API key",
+    placeholder: "无需 key（可留空）",
   },
 ];
 
@@ -121,7 +105,7 @@ const settings = ref<QuoteSettings>({
   use_system_proxy: false,
   metals_refresh_seconds: 60,
   crypto_refresh_seconds: 10,
-  stock_refresh_seconds: 900,
+  stock_refresh_seconds: 15,
   metals_providers: METAL_PROVIDERS.map((item) => ({
     id: item.id,
     enabled: item.defaultEnabled,
@@ -145,7 +129,6 @@ const settings = ref<QuoteSettings>({
 const providerLabelMap = {
   metals: Object.fromEntries(METAL_PROVIDERS.map((item) => [item.id, item])),
   crypto: Object.fromEntries(CRYPTO_PROVIDERS.map((item) => [item.id, item])),
-  stocks: Object.fromEntries(STOCK_PROVIDERS.map((item) => [item.id, item])),
 };
 
 const symbolOptions = computed(() =>
@@ -156,6 +139,52 @@ const symbolOptions = computed(() =>
     }))
     .filter((item) => item.value),
 );
+
+const METALS_CODES = new Set(["XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD", "XCUUSD"]);
+const CRYPTO_SUFFIXES = ["USDT", "USDC", "BUSD"];
+
+function isAShareCode(code: string) {
+  const upper = code.trim().toUpperCase();
+  if (!upper) return false;
+  if (upper.includes(".")) {
+    const [left, right] = upper.split(".", 2);
+    if (!left || !/^\d+$/.test(left)) return false;
+    return right === "SH" || right === "SZ";
+  }
+  if (upper.startsWith("SH") || upper.startsWith("SZ")) {
+    const rest = upper.slice(2);
+    return !!rest && /^\d+$/.test(rest);
+  }
+  if (/^\d+$/.test(upper)) {
+    return upper.startsWith("6") || upper.startsWith("0") || upper.startsWith("3");
+  }
+  return false;
+}
+
+function isCryptoCode(code: string) {
+  const upper = code.trim().toUpperCase();
+  return CRYPTO_SUFFIXES.some((suffix) => upper.endsWith(suffix)) && upper.length > 4;
+}
+
+function validateSymbols() {
+  const invalid: string[] = [];
+  for (const symbol of settings.value.symbols) {
+    const code = symbol.code.trim().toUpperCase();
+    if (!code) {
+      invalid.push("(空)");
+      continue;
+    }
+    if (METALS_CODES.has(code)) continue;
+    if (isCryptoCode(code)) continue;
+    if (isAShareCode(code)) continue;
+    invalid.push(code);
+  }
+  if (invalid.length > 0) {
+    status.value = `编码不支持：${invalid.join(", ")}`;
+    return false;
+  }
+  return true;
+}
 
 function normalizeProviders(list: ProviderConfig[], catalog: ProviderMeta[]) {
   const map = new Map<string, ProviderConfig>();
@@ -237,6 +266,9 @@ function setDisplayMode(mode: DisplayMode) {
 async function save() {
   saving.value = true;
   try {
+    if (!validateSymbols()) {
+      return;
+    }
     const updated = await invoke<QuoteSettings>("save_settings_command", {
       settings: settings.value,
     });
@@ -270,25 +302,35 @@ async function closeWindow() {
           <button class="mini" type="button" @click="addSymbol">+ 添加</button>
         </div>
         <p class="hint">
-          自动识别规则：XAUUSD/XAGUSD → 贵金属；BTCUSDT/ETHUSDT → 加密；其它默认归入股票。
+          自动识别规则：XAUUSD/XAGUSD/XPTUSD/XPDUSD/XCUUSD → 贵金属；BTCUSDT/ETHUSDT → 加密；A
+          股需使用 600519.SH/000001.SZ 或 SH600519/SZ000001。
         </p>
         <div class="preset">
           <span>常用：</span>
           <button type="button" @click="addPreset('XAUUSD', '黄金')">黄金</button>
           <button type="button" @click="addPreset('XAGUSD', '白银')">白银</button>
+          <button type="button" @click="addPreset('XPTUSD', '铂金')">铂金</button>
+          <button type="button" @click="addPreset('XPDUSD', '钯金')">钯金</button>
+          <button type="button" @click="addPreset('XCUUSD', '铜')">铜</button>
           <button type="button" @click="addPreset('BTCUSDT', '比特币')">比特币</button>
           <button type="button" @click="addPreset('ETHUSDT', '以太坊')">以太坊</button>
+          <button type="button" @click="addPreset('BNBUSDT', '币安币')">币安币</button>
+          <button type="button" @click="addPreset('SOLUSDT', 'Solana')">Solana</button>
+          <button type="button" @click="addPreset('XRPUSDT', '瑞波')">瑞波</button>
+          <button type="button" @click="addPreset('ADAUSDT', '艾达')">艾达</button>
+          <button type="button" @click="addPreset('DOGEUSDT', '狗狗币')">狗狗币</button>
+          <button type="button" @click="addPreset('TRXUSDT', '波场')">波场</button>
+          <button type="button" @click="addPreset('LTCUSDT', '莱特币')">莱特币</button>
+          <button type="button" @click="addPreset('DOTUSDT', 'Polkadot')">Polkadot</button>
           <button type="button" @click="addPreset('000001.SH', '上证指数')">上证指数</button>
-          <button type="button" @click="addPreset('HSI.HK', '恒生指数')">恒生指数</button>
-          <button type="button" @click="addPreset('.IXIC.US', '纳斯达克指数')">
-            纳斯达克指数
-          </button>
+          <button type="button" @click="addPreset('399001.SZ', '深证成指')">深证成指</button>
+          <button type="button" @click="addPreset('600519.SH', '贵州茅台')">贵州茅台</button>
         </div>
 
         <div class="symbols">
           <div v-for="(symbol, index) in settings.symbols" :key="index" class="symbol-row">
             <input v-model="symbol.label" placeholder="名称" />
-            <input v-model="symbol.code" placeholder="编码，如 XAUUSD/BTCUSDT/AAPL" />
+            <input v-model="symbol.code" placeholder="编码，如 XAUUSD/BTCUSDT/600519.SH" />
             <button class="link" type="button" @click="removeSymbol(index)">移除</button>
           </div>
         </div>
@@ -305,19 +347,19 @@ async function closeWindow() {
           <input
             id="metals-refresh"
             type="number"
-            min="30"
-            max="3600"
+            min="1"
+            max="86400"
             v-model.number="settings.metals_refresh_seconds"
           />
-          <span class="inline-note">建议 60 秒</span>
+          <span class="inline-note">使用免费接口则建议 60 秒</span>
         </div>
         <div class="field-group">
           <label class="label" for="crypto-refresh">加密刷新间隔（秒）</label>
           <input
             id="crypto-refresh"
             type="number"
-            min="5"
-            max="3600"
+            min="1"
+            max="86400"
             v-model.number="settings.crypto_refresh_seconds"
           />
           <span class="inline-note">建议 10 秒</span>
@@ -327,11 +369,11 @@ async function closeWindow() {
           <input
             id="stock-refresh"
             type="number"
-            min="300"
+            min="1"
             max="86400"
             v-model.number="settings.stock_refresh_seconds"
           />
-          <span class="inline-note">建议 900 秒（15 分钟）</span>
+          <span class="inline-note">建议 15 秒</span>
         </div>
       </article>
 
@@ -373,92 +415,6 @@ async function closeWindow() {
                 type="text"
                 v-model="provider.api_key"
                 :placeholder="providerLabelMap.metals[provider.id]?.placeholder || 'API key'"
-              />
-            </div>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <div class="card-head">
-          <div>
-            <h2>加密数据源</h2>
-          </div>
-        </div>
-        <div class="providers">
-          <div v-for="provider in settings.crypto_providers" :key="provider.id" class="provider">
-            <div class="provider-head">
-              <div>
-                <strong>{{ providerLabelMap.crypto[provider.id]?.name || provider.id }}</strong>
-                <span class="provider-id">{{ provider.id }}</span>
-              </div>
-              <a
-                v-if="providerLabelMap.crypto[provider.id]?.link"
-                :href="providerLabelMap.crypto[provider.id].link"
-                target="_blank"
-              >
-                文档
-              </a>
-            </div>
-            <div class="provider-fields">
-              <label class="checkbox tiny">
-                <input type="checkbox" v-model="provider.enabled" />
-                <span>启用</span>
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="99"
-                v-model.number="provider.priority"
-                placeholder="优先级"
-              />
-              <input
-                type="text"
-                v-model="provider.api_key"
-                :placeholder="providerLabelMap.crypto[provider.id]?.placeholder || 'API key'"
-              />
-            </div>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <div class="card-head">
-          <div>
-            <h2>股票数据源</h2>
-          </div>
-        </div>
-        <div class="providers">
-          <div v-for="provider in settings.stock_providers" :key="provider.id" class="provider">
-            <div class="provider-head">
-              <div>
-                <strong>{{ providerLabelMap.stocks[provider.id]?.name || provider.id }}</strong>
-                <span class="provider-id">{{ provider.id }}</span>
-              </div>
-              <a
-                v-if="providerLabelMap.stocks[provider.id]?.link"
-                :href="providerLabelMap.stocks[provider.id].link"
-                target="_blank"
-              >
-                文档
-              </a>
-            </div>
-            <div class="provider-fields">
-              <label class="checkbox tiny">
-                <input type="checkbox" v-model="provider.enabled" />
-                <span>启用</span>
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="99"
-                v-model.number="provider.priority"
-                placeholder="优先级"
-              />
-              <input
-                type="text"
-                v-model="provider.api_key"
-                :placeholder="providerLabelMap.stocks[provider.id]?.placeholder || 'API key'"
               />
             </div>
           </div>
@@ -524,6 +480,7 @@ async function closeWindow() {
     </section>
     <footer class="hero">
       <div class="hero-actions">
+        <span v-if="status" class="status">{{ status }}</span>
         <button class="primary" type="button" :disabled="saving" @click="save">
           {{ saving ? "保存中..." : "保存设置" }}
         </button>
@@ -599,6 +556,7 @@ body {
       justify-content: flex-end;
       gap: 12px;
       flex-wrap: wrap;
+      align-items: center;
 
       button {
         width: 75px;
@@ -823,6 +781,12 @@ body {
     margin-top: 6px;
     font-size: 12px;
     color: #7a8695;
+  }
+
+  .status {
+    font-size: 12px;
+    color: #b42318;
+    margin-right: auto;
   }
 
   .primary,

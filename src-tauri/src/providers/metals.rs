@@ -5,7 +5,6 @@ use crate::{
         FetchFailureKind, QuoteData,
     },
     settings::ProviderConfig,
-    utils::parse_timestamp_rfc3339,
 };
 
 pub async fn fetch_tiingo_fx(
@@ -81,15 +80,9 @@ pub async fn fetch_tiingo_fx(
             .ok_or_else(|| {
                 FetchError::new(&provider.id, FetchFailureKind::Other, "missing close".to_string())
             })?;
-        let ts = last
-            .get("date")
-            .and_then(|v| v.as_str())
-            .and_then(parse_timestamp_rfc3339)
-            .unwrap_or(0);
         result.push(QuoteData {
             code: code.to_string(),
             price: close,
-            timestamp: ts,
             open,
         });
     }
@@ -177,181 +170,9 @@ pub async fn fetch_twelvedata_quotes(
             .ok_or_else(|| {
                 FetchError::new(&provider.id, FetchFailureKind::Other, "missing close".to_string())
             })?;
-        let ts = first
-            .get("datetime")
-            .and_then(|v| v.as_str())
-            .and_then(parse_timestamp_rfc3339)
-            .unwrap_or(0);
         result.push(QuoteData {
             code: code.to_string(),
             price: close,
-            timestamp: ts,
-            open,
-        });
-    }
-    Ok(result)
-}
-
-pub async fn fetch_finnhub_fx(
-    provider: &ProviderConfig,
-    symbols: &[String],
-    proxy_setting: Option<&crate::network::ProxySetting>,
-) -> Result<Vec<QuoteData>, FetchError> {
-    if provider.api_key.trim().is_empty() {
-        return Err(FetchError::new(
-            &provider.id,
-            FetchFailureKind::Auth,
-            "missing api key".to_string(),
-        ));
-    }
-    let mut result = Vec::new();
-    for code in symbols {
-        let symbol = metals_symbol_map(&provider.id, code).ok_or_else(|| {
-            FetchError::new(
-                &provider.id,
-                FetchFailureKind::Other,
-                format!("unsupported symbol {code}"),
-            )
-        })?;
-        let mut url = reqwest::Url::parse("https://finnhub.io/api/v1/forex/candle")
-            .map_err(|e| FetchError::new(&provider.id, FetchFailureKind::Other, e.to_string()))?;
-        url.query_pairs_mut()
-            .append_pair("symbol", &symbol)
-            .append_pair("resolution", "1")
-            .append_pair("count", "1")
-            .append_pair("token", provider.api_key.trim());
-        let (status, body) = send_get_request(proxy_setting, url, &[])
-        .await
-        .map_err(|e| FetchError::new(&provider.id, FetchFailureKind::Transient, e))?;
-        if !status.is_success() {
-            log_http_error(&provider.id, status, &body);
-            return Err(FetchError::new(
-                &provider.id,
-                status_to_failure_kind(status),
-                format!("http {status}"),
-            ));
-        }
-        let value: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| FetchError::new(&provider.id, FetchFailureKind::Other, e.to_string()))?;
-        if value.get("s").and_then(|v| v.as_str()) != Some("ok") {
-            log_api_error(&provider.id, &body);
-            return Err(FetchError::new(
-                &provider.id,
-                FetchFailureKind::Other,
-                "api error".to_string(),
-            ));
-        }
-        let open = value
-            .get("o")
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.get(0))
-            .and_then(|v| v.as_f64())
-            .ok_or_else(|| {
-                FetchError::new(&provider.id, FetchFailureKind::Other, "missing open".to_string())
-            })?;
-        let close = value
-            .get("c")
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.get(0))
-            .and_then(|v| v.as_f64())
-            .ok_or_else(|| {
-                FetchError::new(&provider.id, FetchFailureKind::Other, "missing close".to_string())
-            })?;
-        let ts = value
-            .get("t")
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.get(0))
-            .and_then(|v| v.as_i64())
-            .map(|v| v as u64)
-            .unwrap_or(0);
-        result.push(QuoteData {
-            code: code.to_string(),
-            price: close,
-            timestamp: ts,
-            open,
-        });
-    }
-    Ok(result)
-}
-
-pub async fn fetch_polygon_fx(
-    provider: &ProviderConfig,
-    symbols: &[String],
-    proxy_setting: Option<&crate::network::ProxySetting>,
-) -> Result<Vec<QuoteData>, FetchError> {
-    if provider.api_key.trim().is_empty() {
-        return Err(FetchError::new(
-            &provider.id,
-            FetchFailureKind::Auth,
-            "missing api key".to_string(),
-        ));
-    }
-    let mut result = Vec::new();
-    let now = chrono::Utc::now();
-    let from = (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
-    let to = now.format("%Y-%m-%d").to_string();
-    for code in symbols {
-        let ticker = metals_symbol_map(&provider.id, code).ok_or_else(|| {
-            FetchError::new(
-                &provider.id,
-                FetchFailureKind::Other,
-                format!("unsupported symbol {code}"),
-            )
-        })?;
-        let url = format!(
-            "https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/minute/{from}/{to}"
-        );
-        let mut url =
-            reqwest::Url::parse(&url)
-                .map_err(|e| FetchError::new(&provider.id, FetchFailureKind::Other, e.to_string()))?;
-        url.query_pairs_mut()
-            .append_pair("adjusted", "true")
-            .append_pair("sort", "desc")
-            .append_pair("limit", "1")
-            .append_pair("apiKey", provider.api_key.trim());
-        let (status, body) = send_get_request(proxy_setting, url, &[])
-        .await
-        .map_err(|e| FetchError::new(&provider.id, FetchFailureKind::Transient, e))?;
-        if !status.is_success() {
-            log_http_error(&provider.id, status, &body);
-            return Err(FetchError::new(
-                &provider.id,
-                status_to_failure_kind(status),
-                format!("http {status}"),
-            ));
-        }
-        let value: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| FetchError::new(&provider.id, FetchFailureKind::Other, e.to_string()))?;
-        let results = value
-            .get("results")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                FetchError::new(&provider.id, FetchFailureKind::Other, "missing results".to_string())
-            })?;
-        let first = results.get(0).ok_or_else(|| {
-            FetchError::new(&provider.id, FetchFailureKind::Other, "empty results".to_string())
-        })?;
-        let open = first
-            .get("o")
-            .and_then(|v| v.as_f64())
-            .ok_or_else(|| {
-                FetchError::new(&provider.id, FetchFailureKind::Other, "missing open".to_string())
-            })?;
-        let close = first
-            .get("c")
-            .and_then(|v| v.as_f64())
-            .ok_or_else(|| {
-                FetchError::new(&provider.id, FetchFailureKind::Other, "missing close".to_string())
-            })?;
-        let ts = first
-            .get("t")
-            .and_then(|v| v.as_i64())
-            .map(|v| (v / 1000) as u64)
-            .unwrap_or(0);
-        result.push(QuoteData {
-            code: code.to_string(),
-            price: close,
-            timestamp: ts,
             open,
         });
     }

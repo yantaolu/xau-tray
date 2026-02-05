@@ -53,7 +53,7 @@ fn default_crypto_refresh_seconds() -> u64 {
 }
 
 fn default_stock_refresh_seconds() -> u64 {
-    900
+    15
 }
 
 fn default_rotate_seconds() -> u64 {
@@ -125,8 +125,6 @@ fn default_metals_providers() -> Vec<ProviderConfig> {
     vec![
         ProviderConfig::new("tiingo", true, 1, ""),
         ProviderConfig::new("twelvedata", true, 2, ""),
-        ProviderConfig::new("finnhub", false, 3, ""),
-        ProviderConfig::new("polygon", false, 4, ""),
     ]
 }
 
@@ -138,7 +136,7 @@ fn default_crypto_providers() -> Vec<ProviderConfig> {
 }
 
 fn default_stock_providers() -> Vec<ProviderConfig> {
-    vec![ProviderConfig::new("twelvedata", true, 1, "")]
+    vec![ProviderConfig::new("eastmoney", true, 1, "")]
 }
 
 fn settings_file_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -192,16 +190,29 @@ pub fn normalize_settings(mut settings: QuoteSettings) -> QuoteSettings {
 
     settings.symbols = symbols;
     settings.rotate_seconds = settings.rotate_seconds.clamp(ROTATE_MIN_SECONDS, 3600);
-    settings.metals_refresh_seconds =
-        settings.metals_refresh_seconds.clamp(30, 3600).max(default_metals_refresh_seconds());
-    settings.crypto_refresh_seconds =
-        settings.crypto_refresh_seconds.clamp(5, 3600).max(default_crypto_refresh_seconds());
-    settings.stock_refresh_seconds =
-        settings.stock_refresh_seconds.clamp(300, 86_400).max(default_stock_refresh_seconds());
+    settings.metals_refresh_seconds = settings.metals_refresh_seconds.clamp(1, 86_400);
+    settings.crypto_refresh_seconds = settings.crypto_refresh_seconds.clamp(1, 86_400);
+    settings.stock_refresh_seconds = settings.stock_refresh_seconds.clamp(1, 86_400);
 
-    settings.metals_providers = normalize_providers(settings.metals_providers, &default_metals_providers());
+    settings.metals_providers = normalize_providers(
+        settings
+            .metals_providers
+            .into_iter()
+            .filter(|provider| {
+                provider.id != "polygon" && provider.id != "metalslive" && provider.id != "finnhub"
+            })
+            .collect(),
+        &default_metals_providers(),
+    );
     settings.crypto_providers = normalize_providers(settings.crypto_providers, &default_crypto_providers());
-    settings.stock_providers = normalize_providers(settings.stock_providers, &default_stock_providers());
+    settings.stock_providers = normalize_providers(
+        settings
+            .stock_providers
+            .into_iter()
+            .filter(|provider| provider.id == "eastmoney")
+            .collect(),
+        &default_stock_providers(),
+    );
 
     if settings.display_mode == DisplayMode::Fixed {
         let fixed = settings
