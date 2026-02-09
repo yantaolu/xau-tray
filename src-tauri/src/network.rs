@@ -6,12 +6,9 @@ use std::{
 
 use reqwest::StatusCode;
 
-use crate::utils::log_line;
-
 #[derive(Clone)]
 pub struct ProxySetting {
     pub url: String,
-    pub source: &'static str,
     pub no_proxy: Option<String>,
 }
 
@@ -37,14 +34,12 @@ pub fn system_proxy_setting() -> Option<ProxySetting> {
     if let Some((url, no_proxy)) = macos_system_proxy_url() {
         return Some(ProxySetting {
             url,
-            source: "system",
             no_proxy,
         });
     }
 
     env_proxy_setting().map(|url| ProxySetting {
         url,
-        source: "env",
         no_proxy: None,
     })
 }
@@ -151,17 +146,6 @@ fn parse_scutil_no_proxy(text: &str) -> Option<String> {
         None
     } else {
         Some(values.join(","))
-    }
-}
-
-pub fn log_proxy_decision(proxy_setting: Option<&ProxySetting>) {
-    if let Some(proxy_setting) = proxy_setting {
-        log_line(&format!(
-            "[xau-tray] network mode: system proxy enabled ({})",
-            proxy_setting.source
-        ));
-    } else {
-        log_line("[xau-tray] network mode: direct connection");
     }
 }
 

@@ -10,7 +10,7 @@ use std::{
 use tauri::{image::Image, tray::TrayIcon};
 
 use crate::{
-    network::{log_proxy_decision, system_proxy_setting, ProxySetting},
+    network::{system_proxy_setting, ProxySetting},
     providers::{
         fetch_crypto_quotes, fetch_metals_quotes, fetch_stock_quotes, provider_cooldown_seconds,
         AssetKind, FetchError, FetchFailureKind,
@@ -379,19 +379,16 @@ pub fn start_polling(
             let should_refresh_stock = now >= next_stock_refresh && !stock_codes.is_empty();
 
             if should_refresh_metals || should_refresh_crypto || should_refresh_stock {
-                let now = chrono::Local::now();
-                log_line(&format!(
-                    "[xau-tray] request tick: {}",
-                    now.format("%Y-%m-%d %H:%M:%S")
-                ));
+                let request_started_at = Instant::now();
+                let request_started_local = chrono::Local::now();
                 let proxy_setting = if settings.use_system_proxy {
                     system_proxy_setting()
                 } else {
                     None
                 };
-                log_proxy_decision(proxy_setting.as_ref());
 
                 if should_refresh_metals {
+                    let started = Instant::now();
                     let _ = refresh_asset_quotes(
                         AssetKind::Metals,
                         &metals_codes,
@@ -405,11 +402,16 @@ pub fn start_polling(
                         Some(&mut metals_provider_cursor),
                     )
                     .await;
+                    log_line(&format!(
+                        "[xau-tray] request metals elapsed: {}ms",
+                        started.elapsed().as_millis()
+                    ));
                     next_metals_refresh =
                         Instant::now() + Duration::from_secs(settings.metals_refresh_seconds);
                 }
 
                 if should_refresh_crypto {
+                    let started = Instant::now();
                     let _ = refresh_asset_quotes(
                         AssetKind::Crypto,
                         &crypto_codes,
@@ -423,11 +425,16 @@ pub fn start_polling(
                         None,
                     )
                     .await;
+                    log_line(&format!(
+                        "[xau-tray] request crypto elapsed: {}ms",
+                        started.elapsed().as_millis()
+                    ));
                     next_crypto_refresh =
                         Instant::now() + Duration::from_secs(settings.crypto_refresh_seconds);
                 }
 
                 if should_refresh_stock {
+                    let started = Instant::now();
                     let _ = refresh_asset_quotes(
                         AssetKind::Stocks,
                         &stock_codes,
@@ -441,9 +448,18 @@ pub fn start_polling(
                         None,
                     )
                     .await;
+                    log_line(&format!(
+                        "[xau-tray] request stocks elapsed: {}ms",
+                        started.elapsed().as_millis()
+                    ));
                     next_stock_refresh =
                         Instant::now() + Duration::from_secs(settings.stock_refresh_seconds);
                 }
+                log_line(&format!(
+                    "[xau-tray] request tick: {} elapsed: {}ms",
+                    request_started_local.format("%Y-%m-%d %H:%M:%S"),
+                    request_started_at.elapsed().as_millis()
+                ));
 
                 let mut tooltip_lines: Vec<String> = Vec::new();
                 for kind in [AssetKind::Metals, AssetKind::Crypto, AssetKind::Stocks] {
@@ -487,6 +503,7 @@ pub fn start_polling(
                 }
             }
 
+            let now = Instant::now();
             if settings.display_mode == DisplayMode::Rotate && now >= next_rotate {
                 next_rotate = now + rotate_interval;
                 rotate_index = (rotate_index + 1) % settings.symbols.len();
